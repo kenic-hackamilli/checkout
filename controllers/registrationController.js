@@ -1,50 +1,48 @@
 const registrationService = require('../services/registrationService');
+const {
+  hasRequiredRegistrationFields,
+  normalizeRegistrationInput,
+} = require('../utils/validation');
 
 exports.createRegistration = async (req, res) => {
-  console.log("---- INCOMING API REQUEST /createRegistration ----");
-  console.log("Request Body:", req.body);
+  const payload = normalizeRegistrationInput(req.body);
+
+  console.log('---- INCOMING API REQUEST /createRegistration ----');
+  console.log('Registration request received:', {
+    domain_name: payload.domain_name,
+    registrar_name: payload.registrar_name,
+  });
 
   try {
-    const { full_name, email, phone, domain_name , registrar_name} = req.body;
-
-    // --------------------
-    // 1. Validate input
-    // --------------------
-    console.log("Validating request fields...");
-
-    if (!full_name || !email || !phone || !domain_name) {
-      console.log("Validation failed: Missing required fields");
+    if (!hasRequiredRegistrationFields(payload)) {
+      console.log('Validation failed: missing required fields');
       return res.status(400).json({ message: 'All fields are required.' });
     }
 
-    console.log("Validation passed");
+    const registration = await registrationService.createRegistration(payload);
 
-    // --------------------
-    // 2. Create registration
-    // --------------------
-    console.log("Calling registration service...");
+    let userMessage = registration.message ||
+      'Your domain registration request has been received and is being processed.';
 
-    const registration = await registrationService.createRegistration({
-      full_name,
-      email,
-      phone,
-      domain_name,
-      registrar_name,
-    });
+    if (!registration.message && registration.push_status === 'success') {
+      userMessage = 'Your request has been submitted and sent to the registrar.';
+    } else if (!registration.message && registration.push_status === 'failed') {
+      userMessage = 'Your request has been submitted, but registrar push failed. It will be retried automatically.';
+    } else if (!registration.message && registration.push_status === 'skipped') {
+      userMessage = 'Your request has been submitted and saved. Registrar push is not configured for this registrar yet.';
+    }
 
-    console.log("Service response:", registration);
-    console.log("Sending response back to client...");
+    console.log('Sending response back to client...');
 
     return res.status(201).json({
-      request_id: registration.request_id,
+      request_id: registration.external_request_id || registration.request_id,
       status: registration.status,
-      message:
-        registration.message ||
-        'Your domain registration request has been received and is being processed.'
+      pushed: Boolean(registration.pushed),
+      message: userMessage,
     });
 
   } catch (err) {
-    console.error("Controller error while creating registration:", err);
+    console.error('Controller error while creating registration:', err.message);
     return res.status(500).json({ message: 'Server error.' });
   }
 };

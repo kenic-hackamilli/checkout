@@ -1,12 +1,19 @@
 const { Pool } = require('pg');
-require('dotenv').config();
+const { env } = require('./config/env');
 
 const pool = new Pool({
-  host: process.env.DB_HOST || 'localhost',
-  user: process.env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD || 'your_password',
-  database: process.env.DB_NAME || 'domain_registry',
-  port: process.env.DB_PORT || 5432,
+  host: env.dbHost || 'localhost',
+  user: env.dbUser || 'postgres',
+  password: env.dbPassword || 'your_password',
+  database: env.dbName || 'domain_registry',
+  port: env.dbPort || 5432,
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+});
+
+pool.on('error', (error) => {
+  console.error('Unexpected idle PostgreSQL client error:', error.message);
 });
 
 module.exports = pool;

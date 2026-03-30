@@ -1,12 +1,16 @@
-import { env } from "../config/env.js";
+const { env } = require('../config/env');
 
 /**
  * Send SMS using TextSMS API
  * @param {string} to - Recipient phone number in format 2547XXXXXXXX
  * @param {string} message - Message to send
- * @returns {Promise<string>} - API response
+ * @returns {Promise<{ response: string, status: number }>} - API response
  */
-export async function sendSms(to, message) {
+async function sendSms(to, message) {
+  if (!env.smsApiKey || !env.smsShortcode || !env.smsPartnerId) {
+    throw new Error('SMS service is not fully configured.');
+  }
+
   try {
     const payload = {
       apikey: env.smsApiKey,
@@ -17,21 +21,30 @@ export async function sendSms(to, message) {
     };
 
     const response = await fetch(
-      "https://sms.textsms.co.ke/api/services/sendsms/",
+      'https://sms.textsms.co.ke/api/services/sendsms/',
       {
-        method: "POST",
+        method: 'POST',
         headers: {
-          "Content-Type": "application/json",
+          'Content-Type': 'application/json',
         },
         body: JSON.stringify(payload),
       }
     );
 
-    // TextSMS sometimes returns plain text, not JSON
     const data = await response.text();
-    return data;
+
+    if (!response.ok) {
+      throw new Error(`SMS API responded with status ${response.status}: ${data}`);
+    }
+
+    return {
+      response: data,
+      status: response.status,
+    };
   } catch (error) {
-    console.error("Error sending SMS:", error);
-    throw new Error("SMS sending failed");
+    console.error('Error sending SMS:', error.message);
+    throw new Error(`SMS sending failed: ${error.message}`);
   }
 }
+
+module.exports = { sendSms };
