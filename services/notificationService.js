@@ -9,6 +9,7 @@ const DELIVERY_STATUS = Object.freeze({
 });
 
 const RETRY_DELAYS_MS = [250, 750, 1500];
+const DEFAULT_MAX_ATTEMPTS = 3;
 
 function serializeDetails(value) {
   if (value == null) {
@@ -26,6 +27,18 @@ function sleep(milliseconds) {
   return new Promise((resolve) => {
     setTimeout(resolve, milliseconds);
   });
+}
+
+function normalizeAttemptCount(value, fallback = DEFAULT_MAX_ATTEMPTS) {
+  const normalizedValue = Number.parseInt(String(value ?? '').trim(), 10);
+
+  return Number.isFinite(normalizedValue) && normalizedValue > 0
+    ? normalizedValue
+    : fallback;
+}
+
+function buildAuditErrorMessage(label, error) {
+  return `${label}: ${error instanceof Error ? error.message : 'Unexpected audit error'}`;
 }
 
 async function upsertDeliveryLog({
@@ -153,9 +166,12 @@ async function runDeliveryWithRetry({
   maxAttempts = env.notificationMaxAttempts,
   forceRetry = false,
 }) {
+  const normalizedMaxAttempts = normalizeAttemptCount(maxAttempts);
+
   if (!destination) {
     return {
       attempts: 0,
+      reason: 'missing_destination',
       status: DELIVERY_STATUS.SKIPPED,
     };
   }
@@ -168,12 +184,15 @@ async function runDeliveryWithRetry({
     templateKey,
     subject,
     payload,
-    maxAttempts,
+    maxAttempts: normalizedMaxAttempts,
   });
 
   const effectiveMaxAttempts = forceRetry
-    ? Math.max(deliveryLog.max_attempts, deliveryLog.attempts + maxAttempts)
-    : maxAttempts;
+    ? Math.max(
+        normalizeAttemptCount(deliveryLog.max_attempts, normalizedMaxAttempts),
+        Number(deliveryLog.attempts || 0) + normalizedMaxAttempts
+      )
+    : normalizedMaxAttempts;
 
   if (forceRetry && deliveryLog.max_attempts !== effectiveMaxAttempts) {
     await pool.query(
@@ -192,6 +211,7 @@ async function runDeliveryWithRetry({
   if (deliveryLog.status === DELIVERY_STATUS.SUCCESS) {
     return {
       attempts: deliveryLog.attempts,
+      reason: 'already_succeeded',
       status: DELIVERY_STATUS.SUCCESS,
     };
   }
@@ -199,11 +219,12 @@ async function runDeliveryWithRetry({
   if (
     !forceRetry &&
     deliveryLog.status === DELIVERY_STATUS.FAILED &&
-    deliveryLog.attempts >= maxAttempts
+    deliveryLog.attempts >= normalizedMaxAttempts
   ) {
     return {
       attempts: deliveryLog.attempts,
       error: deliveryLog.last_error,
+      reason: 'max_attempts_exhausted',
       status: DELIVERY_STATUS.FAILED,
     };
   }
@@ -218,32 +239,59 @@ async function runDeliveryWithRetry({
     try {
       const result = await handler({ attemptNumber, deliveryLogId: deliveryLog.id });
       const responseMessage = serializeDetails(result && (result.response || result));
+      const providerStatusCode =
+        result &&
+        (result.providerStatusCode ||
+          result.statusCode ||
+          (Number.isInteger(result.status) ? result.status : null));
       const providerReference =
         result &&
         (result.providerReference ||
           result.messageId ||
           result.referenceId ||
           null);
+      const auditErrors = [];
 
-      await appendDeliveryAttempt({
-        deliveryLogId: deliveryLog.id,
-        attemptNumber,
-        status: DELIVERY_STATUS.SUCCESS,
-        responseMessage,
-        errorMessage: null,
-      });
+      try {
+        await appendDeliveryAttempt({
+          deliveryLogId: deliveryLog.id,
+          attemptNumber,
+          status: DELIVERY_STATUS.SUCCESS,
+          responseMessage,
+          errorMessage: null,
+        });
+      } catch (error) {
+        auditErrors.push(buildAuditErrorMessage('append success attempt failed', error));
+      }
 
-      await updateDeliveryLog({
-        deliveryLogId: deliveryLog.id,
-        attempts: attemptNumber,
-        status: DELIVERY_STATUS.SUCCESS,
-        responseMessage,
-        errorMessage: null,
-        providerReference,
-      });
+      try {
+        await updateDeliveryLog({
+          deliveryLogId: deliveryLog.id,
+          attempts: attemptNumber,
+          status: DELIVERY_STATUS.SUCCESS,
+          responseMessage,
+          errorMessage: null,
+          providerReference,
+        });
+      } catch (error) {
+        auditErrors.push(buildAuditErrorMessage('update success delivery log failed', error));
+      }
+
+      if (auditErrors.length) {
+        console.error('---- DELIVERY AUDIT WARNING ----', {
+          audit_errors: auditErrors,
+          delivery_type: deliveryType,
+          recipient_type: recipientType,
+          registration_id: registrationId,
+          template_key: templateKey,
+          transport_status: DELIVERY_STATUS.SUCCESS,
+        });
+      }
 
       return {
         attempts: attemptNumber,
+        audit_error: auditErrors.length ? auditErrors.join(' | ') : null,
+        providerStatusCode,
         providerReference,
         response: result,
         status: DELIVERY_STATUS.SUCCESS,
@@ -251,31 +299,53 @@ async function runDeliveryWithRetry({
     } catch (error) {
       lastErrorMessage = error.message || 'Unexpected delivery error';
       const nextStatus =
-        attemptNumber === maxAttempts
+        attemptNumber === effectiveMaxAttempts
           ? DELIVERY_STATUS.FAILED
           : DELIVERY_STATUS.PENDING;
+      const auditErrors = [];
 
-      await appendDeliveryAttempt({
-        deliveryLogId: deliveryLog.id,
-        attemptNumber,
-        status: DELIVERY_STATUS.FAILED,
-        responseMessage: null,
-        errorMessage: lastErrorMessage,
-      });
+      try {
+        await appendDeliveryAttempt({
+          deliveryLogId: deliveryLog.id,
+          attemptNumber,
+          status: DELIVERY_STATUS.FAILED,
+          responseMessage: null,
+          errorMessage: lastErrorMessage,
+        });
+      } catch (auditError) {
+        auditErrors.push(buildAuditErrorMessage('append failure attempt failed', auditError));
+      }
 
-      await updateDeliveryLog({
-        deliveryLogId: deliveryLog.id,
-        attempts: attemptNumber,
-        status: nextStatus,
-        responseMessage: null,
-        errorMessage: lastErrorMessage,
-        providerReference: null,
-      });
+      try {
+        await updateDeliveryLog({
+          deliveryLogId: deliveryLog.id,
+          attempts: attemptNumber,
+          status: nextStatus,
+          responseMessage: null,
+          errorMessage: lastErrorMessage,
+          providerReference: null,
+        });
+      } catch (auditError) {
+        auditErrors.push(buildAuditErrorMessage('update failure delivery log failed', auditError));
+      }
+
+      if (auditErrors.length) {
+        console.error('---- DELIVERY AUDIT WARNING ----', {
+          audit_errors: auditErrors,
+          delivery_type: deliveryType,
+          recipient_type: recipientType,
+          registration_id: registrationId,
+          template_key: templateKey,
+          transport_status: nextStatus,
+        });
+      }
 
       if (nextStatus === DELIVERY_STATUS.FAILED) {
         return {
           attempts: attemptNumber,
+          audit_error: auditErrors.length ? auditErrors.join(' | ') : null,
           error: lastErrorMessage,
+          reason: 'max_attempts_exhausted',
           status: DELIVERY_STATUS.FAILED,
         };
       }
@@ -291,6 +361,7 @@ async function runDeliveryWithRetry({
   return {
     attempts: effectiveMaxAttempts,
     error: lastErrorMessage,
+    reason: 'loop_exhausted',
     status: DELIVERY_STATUS.FAILED,
   };
 }

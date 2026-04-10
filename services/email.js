@@ -60,7 +60,10 @@ async function sendEmail({ to, subject, text, html }) {
   });
 
   return {
+    accepted: Array.isArray(info.accepted) ? info.accepted : [],
     messageId: info.messageId,
+    providerStatusCode: null,
+    rejected: Array.isArray(info.rejected) ? info.rejected : [],
     response: info.response,
   };
 }

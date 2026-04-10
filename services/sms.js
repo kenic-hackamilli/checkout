@@ -38,6 +38,7 @@ async function sendSms(to, message) {
     }
 
     return {
+      providerStatusCode: response.status,
       response: data,
       status: response.status,
     };

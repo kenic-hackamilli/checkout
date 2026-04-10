@@ -23,7 +23,8 @@ exports.createRegistration = async ({ full_name, email, phone, domain_name, regi
 
     return {
       ...existing.rows[0],
-      message: 'You have already submitted this request and it is being processed.'
+      message:
+        `Hi ${full_name}, your order for ${domain_name} with Domain registration has been received and is being processed. Kindly await next steps from ${registrar_name || 'the selected registrar'}.`
     };
   }
 
@@ -51,7 +52,8 @@ exports.createRegistration = async ({ full_name, email, phone, domain_name, regi
     // Avoid double .ke
     const formattedDomain = domain_name.endsWith(".ke") ? domain_name : `${domain_name}.ke`;
 
-    const message = `Hi ${full_name}, your request to register ${formattedDomain} with ${registrar_name} has been received and its currently being processed.`;
+    const message =
+      `Hi ${full_name}, your order for ${formattedDomain} with Domain registration has been received and is being processed. Kindly await next steps from ${registrar_name || 'the selected registrar'}.`;
     const smsResponse = await sendSms(phone, message);
 
     console.log("SMS sent successfully:", smsResponse);

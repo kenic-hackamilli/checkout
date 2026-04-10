@@ -40,11 +40,17 @@ exports.createRegistration = async (req, res) => {
       status: registration.status,
       message:
         registration.message ||
-        'Your domain registration request has been received and is being processed.'
+        'Your order has been received and is being processed. Kindly await next steps from the selected registrar.'
     });
 
   } catch (err) {
     console.error("Controller error while creating registration:", err);
+    if (err.code === 'ACTIVE_DOMAIN_ORDER_EXISTS') {
+      return res.status(409).json({
+        message: err.message,
+        request_id: err.request_id || null,
+      });
+    }
     return res.status(500).json({ message: 'Server error.' });
   }
 };

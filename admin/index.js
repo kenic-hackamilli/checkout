@@ -80,6 +80,39 @@ function formatBoolean(value) {
   return value ? 'Yes' : 'No';
 }
 
+function formatCurrencyKsh(value) {
+  if (value === null || value === undefined || value === '') {
+    return '—';
+  }
+
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) {
+    return String(value);
+  }
+
+  return `KSh ${numericValue.toLocaleString('en-KE')}`;
+}
+
+function formatBillingLabel(billingCycle, billingPeriodMonths) {
+  const normalizedCycle = typeof billingCycle === 'string' ? billingCycle.toLowerCase() : '';
+  const normalizedMonths = Number(billingPeriodMonths);
+
+  if (normalizedCycle === 'monthly' || normalizedMonths === 1) {
+    return 'Monthly';
+  }
+
+  if (normalizedCycle === 'yearly' || normalizedMonths === 12) {
+    return 'Yearly';
+  }
+
+  if (Number.isFinite(normalizedMonths) && normalizedMonths > 0) {
+    return `${normalizedMonths} months`;
+  }
+
+  return 'Flexible';
+}
+
 function getRegistrationLifecycleStatus(registration) {
   if (!registration) {
     return 'Unknown';
@@ -116,6 +149,136 @@ function formatJson(value) {
   }
 }
 
+function createDomainOfferingDraft(existingOffer = null) {
+  return {
+    billingPeriodMonths: existingOffer ? String(existingOffer.billing_period_months || 12) : '12',
+    domainExtensionId: existingOffer ? existingOffer.domain_extension_id || '' : '',
+    isActive: existingOffer ? Boolean(existingOffer.is_active) : true,
+    offeringId: existingOffer ? existingOffer.id : '',
+    registrationPriceKsh: existingOffer
+      ? String(existingOffer.registration_price_ksh ?? '')
+      : '',
+    renewalPriceKsh: existingOffer
+      ? String(existingOffer.renewal_price_ksh ?? existingOffer.registration_price_ksh ?? '')
+      : '',
+    transferPriceKsh: existingOffer && existingOffer.transfer_price_ksh != null
+      ? String(existingOffer.transfer_price_ksh)
+      : '',
+  };
+}
+
+function createServiceOfferingDraft(existingOffer = null) {
+  return {
+    billingCycle: '',
+    billingPeriodMonths: existingOffer ? String(existingOffer.billing_period_months || 1) : '1',
+    isActive: existingOffer ? Boolean(existingOffer.is_active) : true,
+    offeringId: existingOffer ? existingOffer.id : '',
+    planCode: existingOffer ? existingOffer.plan_code || '' : '',
+    planName: existingOffer ? existingOffer.plan_name || '' : '',
+    priceKsh: existingOffer ? String(existingOffer.price_ksh ?? '') : '',
+    serviceProductId: existingOffer ? existingOffer.service_product_id || '' : '',
+  };
+}
+
+function createServicePackageDraft(existingPackage = null) {
+  return {
+    detailsJson: existingPackage
+      ? JSON.stringify(existingPackage.details_json || {}, null, 2)
+      : '{}',
+    displayOrder: existingPackage
+      ? String(existingPackage.display_order ?? 0)
+      : '0',
+    featureBulletsText:
+      existingPackage && Array.isArray(existingPackage.feature_bullets_json)
+        ? existingPackage.feature_bullets_json.join(' | ')
+        : '',
+    isActive: existingPackage ? Boolean(existingPackage.is_active) : true,
+    packageCode: existingPackage ? existingPackage.package_code || '' : '',
+    packageId: existingPackage ? existingPackage.id : '',
+    packageName: existingPackage ? existingPackage.package_name || '' : '',
+    serviceProductId: existingPackage ? existingPackage.service_product_id || '' : '',
+    shortDescription: existingPackage
+      ? existingPackage.short_description || ''
+      : '',
+  };
+}
+
+function createServicePackagePriceDraft(existingPrice = null) {
+  return {
+    billingCycle: existingPrice ? existingPrice.billing_cycle || '' : '',
+    billingLabel: existingPrice ? existingPrice.billing_label || '' : '',
+    billingPeriodMonths: existingPrice
+      ? String(existingPrice.billing_period_months || 1)
+      : '1',
+    currencyCode: existingPrice ? existingPrice.currency_code || 'KES' : 'KES',
+    isActive: existingPrice ? Boolean(existingPrice.is_active) : true,
+    isDefault: existingPrice ? Boolean(existingPrice.is_default) : false,
+    priceId: existingPrice ? existingPrice.id : '',
+    priceKsh: existingPrice ? String(existingPrice.price_ksh ?? '') : '',
+    setupFeeKsh:
+      existingPrice && existingPrice.setup_fee_ksh != null
+        ? String(existingPrice.setup_fee_ksh)
+        : '0',
+  };
+}
+
+function formatFeatureHighlights(value) {
+  if (!value) {
+    return '—';
+  }
+
+  if (Array.isArray(value)) {
+    const highlights = value
+      .map((item) => (typeof item === 'string' ? item.trim() : ''))
+      .filter(Boolean);
+
+    return highlights.length ? highlights.join(' | ') : '—';
+  }
+
+  return String(value);
+}
+
+function getBooleanFieldLabels(field = {}) {
+  return {
+    falseLabel: field.falseLabel || 'Inactive',
+    trueLabel: field.trueLabel || 'Active',
+  };
+}
+
+function formatBooleanDraftValue(field, value) {
+  const labels = getBooleanFieldLabels(field);
+  return value ? labels.trueLabel : labels.falseLabel;
+}
+
+function formatPackageDefaultBilling(servicePackage) {
+  if (
+    !servicePackage ||
+    Number(servicePackage.price_count || 0) < 1 ||
+    (!servicePackage.default_billing_cycle &&
+      !servicePackage.default_billing_period_months)
+  ) {
+    return 'No pricing';
+  }
+
+  return formatBillingLabel(
+    servicePackage.default_billing_cycle,
+    servicePackage.default_billing_period_months
+  );
+}
+
+function formatPackageDefaultPrice(servicePackage) {
+  if (
+    !servicePackage ||
+    Number(servicePackage.price_count || 0) < 1 ||
+    servicePackage.default_price_ksh === null ||
+    servicePackage.default_price_ksh === undefined
+  ) {
+    return 'No pricing';
+  }
+
+  return formatCurrencyKsh(servicePackage.default_price_ksh);
+}
+
 function createRegistrarDraft(existingRegistrar = null) {
   return {
     apiEndpoint: existingRegistrar ? existingRegistrar.api_endpoint || '' : '',
@@ -129,7 +292,7 @@ function createRegistrarDraft(existingRegistrar = null) {
 
 function formatRegistrarDraftValue(field, draft) {
   if (field.type === 'boolean') {
-    return draft[field.key] ? 'Active' : 'Inactive';
+    return formatBooleanDraftValue(field, draft[field.key]);
   }
 
   const value = draft[field.key];
@@ -184,10 +347,22 @@ function buildRegistrationLookupContent(lookup) {
     '',
     ' Domain And Registrar',
     ` Domain: ${registration.domain_name}`,
+    ` Domain Extension: ${toDisplay(registration.domain_extension)}`,
+    ` Target Service: ${toDisplay(registration.target_service)}`,
+    ` Product Family: ${toDisplay(registration.product_family)}`,
+    ` Selection Kind: ${toDisplay(registration.selection_kind)}`,
+    ` Package Name: ${toDisplay(registration.package_name)}`,
+    ` Package Code: ${toDisplay(registration.package_code)}`,
+    ` Billing: ${formatBillingLabel(registration.billing_cycle, registration.billing_period_months)}`,
+    ` Quoted Price: ${formatCurrencyKsh(registration.quoted_price_ksh)}`,
     ` Chosen Registrar: ${toDisplay(registration.registrar_name)}`,
+    ` Registrar Code: ${toDisplay(registration.registrar_code)}`,
     ` Registrar Active: ${registration.registrar_is_active == null ? 'Unknown' : formatBoolean(registration.registrar_is_active)}`,
     ` Registrar Notification Email: ${toDisplay(registration.registrar_notification_email)}`,
     ` Registrar API Endpoint: ${toDisplay(registration.registrar_api_endpoint)}`,
+    '',
+    ' Selection Snapshot',
+    `${formatJson(registration.selection_snapshot_json)}`,
     '',
     ' Delivery Summary',
     ` Successful Deliveries: ${registration.successful_delivery_count}`,
@@ -457,6 +632,16 @@ class AdminApp {
           return;
         }
 
+        if (ch === 'o') {
+          await this.openDomainOfferManager();
+          return;
+        }
+
+        if (ch === 'p') {
+          await this.openServicePackageManager();
+          return;
+        }
+
         if (ch === 't') {
           await this.toggleSelectedRegistrar();
         }
@@ -513,7 +698,7 @@ class AdminApp {
       dashboard: `${common} | s search reference`,
       failed: `${common} | r retry selected | R retry all`,
       logs: `${common} | arrows move`,
-      registrars: `${common} | a add | e open editor | t toggle active`,
+      registrars: `${common} | a add | e edit | o domain offers | p packages | t toggle active`,
     };
 
     this.helpBar.setContent(` ${viewHelp[this.state.view]}`);
@@ -707,7 +892,7 @@ class AdminApp {
     const registrarLines = activeRegistrars.length
       ? activeRegistrars.slice(0, 10).map(
           (registrar) =>
-            `${truncate(registrar.name, 24)}  requests:${registrar.total_requests}  processed:${registrar.processed_requests}\nemail:${toDisplay(registrar.notification_email)}`
+            `${truncate(`${registrar.registrar_code} ${registrar.name}`, 30)}  requests:${registrar.total_requests}  processed:${registrar.processed_requests}\nemail:${toDisplay(registrar.notification_email)}`
         )
       : ['No active registrars configured yet.'];
 
@@ -743,7 +928,7 @@ class AdminApp {
       left: 1,
       right: 1,
       height: 1,
-      content: `${pad('Name', 22)} ${pad('Status', 10)} ${pad('Email', 22)} ${pad('API', 10)} ${pad('Requests', 8)}`,
+      content: `${pad('Code', 8)} ${pad('Name', 18)} ${pad('Status', 10)} ${pad('Email', 20)} ${pad('API', 10)} ${pad('Req', 6)}`,
       style: {
         bold: true,
         fg: 'white',
@@ -756,9 +941,11 @@ class AdminApp {
       left: 0,
       right: 0,
       bottom: 0,
+      alwaysScroll: true,
       keys: true,
       vi: true,
       mouse: true,
+      scrollable: true,
       scrollbar: {
         ch: ' ',
         style: {
@@ -775,7 +962,7 @@ class AdminApp {
       items: registrars.length
         ? registrars.map(
             (registrar) =>
-              `${pad(registrar.name, 22)} ${pad(registrar.is_active ? 'ACTIVE' : 'INACTIVE', 10)} ${pad(registrar.notification_email || '—', 22)} ${pad(registrar.api_endpoint ? 'CONFIGURED' : '—', 10)} ${pad(registrar.total_requests, 8)}`
+              `${pad(registrar.registrar_code || '—', 8)} ${pad(registrar.name, 18)} ${pad(registrar.is_active ? 'ACTIVE' : 'INACTIVE', 10)} ${pad(registrar.notification_email || '—', 20)} ${pad(registrar.api_endpoint ? 'CONFIGURED' : '—', 10)} ${pad(registrar.total_requests, 6)}`
           )
         : ['No registrars found. Press "a" to add one.'],
     });
@@ -794,17 +981,24 @@ class AdminApp {
       detailsPanel.setContent(
         [
           '',
+          ` Code: ${toDisplay(registrar.registrar_code)}`,
           ` Name: ${registrar.name}`,
           ` Active: ${formatBoolean(registrar.is_active)}`,
           ` Notification Email: ${toDisplay(registrar.notification_email)}`,
           ` API Endpoint: ${toDisplay(registrar.api_endpoint)}`,
           ` Total Requests: ${registrar.total_requests}`,
           ` Processed Requests: ${registrar.processed_requests}`,
+          ` Domain Offers: ${registrar.domain_extension_count}`,
+          ` Service Packages: ${toDisplay(registrar.service_package_count)}`,
+          ` Package Prices: ${toDisplay(registrar.service_package_price_count)}`,
+          ` Bundles: ${registrar.bundle_count}`,
           ` Created At: ${formatDateTime(registrar.created_at)}`,
           '',
           ' Actions:',
           '  a  Add registrar',
           '  e  Open registrar editor',
+          '  o  Manage domain offers and pricing',
+          '  p  Manage packages and pricing',
           '  t  Toggle active / inactive',
         ].join('\n')
       );
@@ -814,6 +1008,22 @@ class AdminApp {
       this.selectedIndices.registrars = index;
       renderDetails(index);
       this.screen.render();
+    });
+
+    list.key(['a'], async () => {
+      await this.openRegistrarForm();
+    });
+    list.key(['e'], async () => {
+      await this.editSelectedRegistrar();
+    });
+    list.key(['o'], async () => {
+      await this.openDomainOfferManager();
+    });
+    list.key(['p'], async () => {
+      await this.openServicePackageManager();
+    });
+    list.key(['t'], async () => {
+      await this.toggleSelectedRegistrar();
     });
 
     if (registrars.length) {
@@ -1343,14 +1553,15 @@ class AdminApp {
 
   async openTextFieldEditor(field, currentValue) {
     const editorValue = currentValue == null ? '' : String(currentValue);
+    const isMultiline = field.multiline === true;
 
     return new Promise((resolve) => {
       const modal = blessed.box({
         parent: this.screen,
         top: 'center',
         left: 'center',
-        width: '76%',
-        height: 13,
+        width: isMultiline ? '82%' : '76%',
+        height: isMultiline ? '78%' : 13,
         border: 'line',
         label: ` Edit ${field.label} `,
         tags: true,
@@ -1368,7 +1579,7 @@ class AdminApp {
         top: 1,
         left: 2,
         right: 2,
-        height: 3,
+        height: isMultiline ? 4 : 3,
         tags: true,
         content: `{bold}${field.label}{/bold}\n${field.description}`,
         style: {
@@ -1376,28 +1587,32 @@ class AdminApp {
         },
       });
 
-      const currentValueBox = blessed.box({
-        parent: modal,
-        top: 4,
-        left: 2,
-        right: 2,
-        height: 2,
-        tags: true,
-        content: `{bold}Current Value:{/bold} ${editorValue || 'Not set'}`,
-        style: {
-          fg: 'yellow',
-        },
-      });
+      const currentValueBox = isMultiline
+        ? null
+        : blessed.box({
+            parent: modal,
+            top: 4,
+            left: 2,
+            right: 2,
+            height: 2,
+            tags: true,
+            content: `{bold}Current Value:{/bold} ${editorValue || 'Not set'}`,
+            style: {
+              fg: 'yellow',
+            },
+          });
 
-      const input = blessed.textbox({
+      const input = (isMultiline ? blessed.textarea : blessed.textbox)({
         parent: modal,
-        top: 7,
+        top: isMultiline ? 6 : 7,
         left: 2,
         right: 2,
-        height: 3,
+        bottom: isMultiline ? 2 : undefined,
+        height: isMultiline ? undefined : 3,
         inputOnFocus: false,
         keys: true,
         mouse: true,
+        scrollable: isMultiline,
         border: 'line',
         value: editorValue,
         style: {
@@ -1419,7 +1634,9 @@ class AdminApp {
         left: 2,
         right: 2,
         height: 1,
-        content: ' Type in the white box. Press Enter to save this field or Esc to cancel.',
+        content: isMultiline
+          ? ' Type in the white box. Press Ctrl+S to save this field or Esc to cancel. Enter adds a new line.'
+          : ' Type in the white box. Press Enter to save this field or Esc to cancel.',
         style: {
           fg: 'green',
         },
@@ -1430,8 +1647,18 @@ class AdminApp {
       input.setValue(editorValue);
       this.screen.render();
 
+      if (isMultiline) {
+        input.key(['C-s'], () => {
+          if (typeof input._done === 'function') {
+            input._done(null, input.getValue());
+          }
+        });
+      }
+
       input.readInput((error, result) => {
-        currentValueBox.detach();
+        if (currentValueBox) {
+          currentValueBox.detach();
+        }
         modal.detach();
         this.screen.restoreFocus();
         this.screen.render();
@@ -1448,6 +1675,7 @@ class AdminApp {
 
   async openBooleanFieldEditor(field, currentValue) {
     return new Promise((resolve) => {
+      const labels = getBooleanFieldLabels(field);
       const modal = blessed.box({
         parent: this.screen,
         top: 'center',
@@ -1480,8 +1708,8 @@ class AdminApp {
       });
 
       const options = [
-        { label: 'Active', value: true },
-        { label: 'Inactive', value: false },
+        { label: labels.trueLabel, value: true },
+        { label: labels.falseLabel, value: false },
       ];
 
       const list = blessed.list({
@@ -1532,6 +1760,338 @@ class AdminApp {
       list.select(options.findIndex((option) => option.value === currentValue) >= 0
         ? options.findIndex((option) => option.value === currentValue)
         : 0);
+      this.screen.render();
+    });
+  }
+
+  getDraftFieldDisplayValue(field, draft) {
+    if (field.type === 'boolean') {
+      return formatBooleanDraftValue(field, draft[field.key]);
+    }
+
+    if (field.type === 'choice') {
+      const option = (field.options || []).find(
+        (item) => String(item.value) === String(draft[field.key] || '')
+      );
+      return option ? option.label : 'Not set';
+    }
+
+    const value = draft[field.key];
+    return value === null || value === undefined || value === ''
+      ? 'Not set'
+      : String(value).replace(/\s+/g, ' ').trim();
+  }
+
+  async openChoiceFieldEditor(field, currentValue) {
+    const options = field.options || [];
+
+    if (!options.length) {
+      this.setStatus(`No choices are available for ${field.label} right now.`, 'warning');
+      return null;
+    }
+
+    return new Promise((resolve) => {
+      const modal = blessed.box({
+        parent: this.screen,
+        top: 'center',
+        left: 'center',
+        width: '68%',
+        height: '70%',
+        border: 'line',
+        label: ` Choose ${field.label} `,
+        style: {
+          bg: 'black',
+          fg: 'white',
+          border: {
+            fg: 'cyan',
+          },
+        },
+      });
+
+      blessed.box({
+        parent: modal,
+        top: 1,
+        left: 2,
+        right: 2,
+        height: 3,
+        tags: true,
+        content: `{bold}${field.label}{/bold}\n${field.description}`,
+        style: {
+          fg: 'white',
+        },
+      });
+
+      const list = blessed.list({
+        parent: modal,
+        top: 5,
+        left: 1,
+        width: '46%',
+        bottom: 2,
+        keys: true,
+        vi: true,
+        mouse: true,
+        style: {
+          selected: {
+            bg: 'cyan',
+            fg: 'black',
+            bold: true,
+          },
+        },
+        items: options.map((option) => option.label),
+      });
+
+      const details = blessed.box({
+        parent: modal,
+        top: 5,
+        left: '46%',
+        right: 1,
+        bottom: 2,
+        border: 'line',
+        label: ' Choice Details ',
+        scrollable: true,
+        style: {
+          border: {
+            fg: 'yellow',
+          },
+        },
+      });
+
+      blessed.box({
+        parent: modal,
+        bottom: 0,
+        left: 2,
+        right: 2,
+        height: 1,
+        content: ' Up/Down move | Enter select | Esc cancel ',
+        style: {
+          fg: 'green',
+        },
+      });
+
+      const renderDetails = (selectedIndex) => {
+        const option = options[selectedIndex] || options[0];
+
+        details.setContent(
+          [
+            '',
+            ` Label: ${option.label}`,
+            ` Value: ${toDisplay(option.value)}`,
+            '',
+            ` Description: ${toDisplay(option.description)}`,
+          ].join('\n')
+        );
+      };
+
+      const done = (value) => {
+        modal.detach();
+        this.screen.restoreFocus();
+        this.screen.render();
+        resolve(value);
+      };
+
+      modal.key(['escape', 'x'], () => done(null));
+      list.key(['escape', 'x'], () => done(null));
+      list.key(['enter'], () => {
+        const option = options[list.selected] || options[0];
+        done(option.value);
+      });
+
+      list.on('select item', (_, index) => {
+        renderDetails(index);
+        this.screen.render();
+      });
+
+      const selectedIndex = Math.max(
+        0,
+        options.findIndex((option) => String(option.value) === String(currentValue || ''))
+      );
+
+      this.screen.saveFocus();
+      renderDetails(selectedIndex);
+      list.focus();
+      list.select(selectedIndex);
+      this.screen.render();
+    });
+  }
+
+  async openStructuredDraftEditor({
+    title,
+    fields,
+    draft,
+    buildPreviewLines,
+  }) {
+    return new Promise((resolve) => {
+      const modal = blessed.box({
+        parent: this.screen,
+        top: 'center',
+        left: 'center',
+        width: '88%',
+        height: '82%',
+        border: 'line',
+        label: title,
+        style: {
+          bg: 'black',
+          fg: 'white',
+          border: {
+            fg: 'cyan',
+          },
+        },
+      });
+
+      const fieldsPanel = blessed.box({
+        parent: modal,
+        top: 0,
+        left: 0,
+        width: '44%',
+        bottom: 3,
+        border: 'line',
+        label: ' Fields ',
+        style: {
+          border: {
+            fg: 'green',
+          },
+        },
+      });
+
+      const detailsPanel = blessed.box({
+        parent: modal,
+        top: 0,
+        left: '44%',
+        width: '56%',
+        bottom: 3,
+        border: 'line',
+        label: ' Field Details ',
+        scrollable: true,
+        style: {
+          border: {
+            fg: 'yellow',
+          },
+        },
+      });
+
+      blessed.box({
+        parent: modal,
+        left: 2,
+        right: 2,
+        bottom: 0,
+        height: 2,
+        content: ' Enter edit selected field | s save draft | x close | Esc cancel | Up/Down move between fields ',
+        style: {
+          fg: 'green',
+        },
+      });
+
+      const fieldList = blessed.list({
+        parent: fieldsPanel,
+        top: 1,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        keys: true,
+        vi: true,
+        mouse: true,
+        style: {
+          selected: {
+            bg: 'cyan',
+            fg: 'black',
+            bold: true,
+          },
+        },
+        items: [],
+      });
+
+      const cleanup = (value) => {
+        modal.detach();
+        this.screen.restoreFocus();
+        this.screen.render();
+        resolve(value);
+      };
+
+      const renderFieldList = () => {
+        fieldList.setItems(
+          fields.map((field) =>
+            `${pad(field.label, 22)} ${truncate(this.getDraftFieldDisplayValue(field, draft), 26)}`
+          )
+        );
+      };
+
+      const renderFieldDetails = (selectedIndex) => {
+        const field = fields[selectedIndex] || fields[0];
+        const previewLines = buildPreviewLines(draft);
+
+        detailsPanel.setContent(
+          [
+            '',
+            ` Field: ${field.label}`,
+            '',
+            ` Current Value: ${this.getDraftFieldDisplayValue(field, draft)}`,
+            '',
+            ` Description: ${field.description}`,
+            '',
+            ' Editing Flow:',
+            '  1. Move to the field you want.',
+            '  2. Press Enter to edit only that field.',
+            '  3. Press s when the full draft looks right.',
+            '',
+            ' Draft Preview:',
+            ...previewLines.map((line) => `  ${line}`),
+          ].join('\n')
+        );
+      };
+
+      const editSelectedField = async () => {
+        const selectedIndex = fieldList.selected || 0;
+        const field = fields[selectedIndex];
+
+        if (!field) {
+          return;
+        }
+
+        if (field.type === 'boolean') {
+          const nextValue = await this.openBooleanFieldEditor(field, draft[field.key]);
+
+          if (nextValue !== null) {
+            draft[field.key] = nextValue;
+          }
+        } else if (field.type === 'choice') {
+          const nextValue = await this.openChoiceFieldEditor(field, draft[field.key]);
+
+          if (nextValue !== null) {
+            draft[field.key] = nextValue;
+          }
+        } else {
+          const nextValue = await this.openTextFieldEditor(field, draft[field.key]);
+
+          if (nextValue !== null) {
+            draft[field.key] = nextValue.trim();
+          }
+        }
+
+        renderFieldList();
+        fieldList.select(selectedIndex);
+        renderFieldDetails(selectedIndex);
+        fieldList.focus();
+        this.screen.render();
+      };
+
+      modal.key(['escape', 'x'], () => cleanup(null));
+      modal.key(['s'], () => cleanup({ ...draft }));
+      fieldList.key(['escape', 'x'], () => cleanup(null));
+      fieldList.key(['s'], () => cleanup({ ...draft }));
+      fieldList.key(['enter'], async () => {
+        await editSelectedField();
+      });
+
+      fieldList.on('select item', (_, index) => {
+        renderFieldDetails(index);
+        this.screen.render();
+      });
+
+      this.screen.saveFocus();
+      renderFieldList();
+      renderFieldDetails(0);
+      fieldList.focus();
+      fieldList.select(0);
       this.screen.render();
     });
   }
@@ -1748,6 +2308,1367 @@ class AdminApp {
           this.renderView();
         }
       );
+    } catch (error) {
+      this.setStatus(error.message, 'error');
+    } finally {
+      this.modalActive = false;
+      this.screen.render();
+    }
+  }
+
+  async refreshRegistrarsState() {
+    this.state.registrars = await adminService.listRegistrars();
+    this.renderView();
+    this.screen.render();
+  }
+
+  async openDomainOfferingForm(registrar, domainExtensions, existingOffer = null) {
+    const draft = createDomainOfferingDraft(existingOffer);
+    const fields = [
+      {
+        description: 'Choose the domain extension this registrar offers.',
+        key: 'domainExtensionId',
+        label: 'Domain Extension',
+        options: domainExtensions.map((extension) => ({
+          description: `${extension.label} ${extension.extension} | ${extension.category_key}`,
+          label: `${extension.label} ${extension.extension}`,
+          value: extension.id,
+        })),
+        type: 'choice',
+      },
+      {
+        description: 'How many months this price covers. Use 12 for yearly or 1 for monthly.',
+        key: 'billingPeriodMonths',
+        label: 'Billing Months',
+        type: 'text',
+      },
+      {
+        description: 'KSh price for a brand new registration.',
+        key: 'registrationPriceKsh',
+        label: 'Registration Price',
+        type: 'text',
+      },
+      {
+        description: 'KSh price for renewal. Leave aligned with registration if they match.',
+        key: 'renewalPriceKsh',
+        label: 'Renewal Price',
+        type: 'text',
+      },
+      {
+        description: 'Optional KSh transfer-in price. Leave blank if not used yet.',
+        key: 'transferPriceKsh',
+        label: 'Transfer Price',
+        type: 'text',
+      },
+      {
+        description: 'Controls whether this offering is shown as active in operations.',
+        key: 'isActive',
+        label: 'Active Status',
+        type: 'boolean',
+      },
+    ];
+
+    return this.openStructuredDraftEditor({
+      title: existingOffer
+        ? ` Edit Domain Offer: ${registrar.name} `
+        : ` Add Domain Offer: ${registrar.name} `,
+      fields,
+      draft,
+      buildPreviewLines: (currentDraft) => {
+        const selectedExtension = domainExtensions.find(
+          (extension) => extension.id === currentDraft.domainExtensionId
+        );
+
+        return [
+          `Registrar: ${registrar.name}`,
+          `Extension: ${selectedExtension ? `${selectedExtension.label} ${selectedExtension.extension}` : 'Not set'}`,
+          `Billing: ${formatBillingLabel(null, currentDraft.billingPeriodMonths)}`,
+          `Registration: ${formatCurrencyKsh(currentDraft.registrationPriceKsh)}`,
+          `Renewal: ${formatCurrencyKsh(currentDraft.renewalPriceKsh)}`,
+          `Transfer: ${formatCurrencyKsh(currentDraft.transferPriceKsh)}`,
+          `Active: ${currentDraft.isActive ? 'Active' : 'Inactive'}`,
+        ];
+      },
+    });
+  }
+
+  async openServicePackageForm(registrar, serviceProducts, existingPackage = null) {
+    const draft = createServicePackageDraft(existingPackage);
+    const fields = [
+      {
+        description: 'Choose the primary service this package belongs to.',
+        key: 'serviceProductId',
+        label: 'Service',
+        options: serviceProducts.map((service) => ({
+          description: `${service.name} | ${service.service_category}`,
+          label: `${service.name} (${service.service_category})`,
+          value: service.id,
+        })),
+        type: 'choice',
+      },
+      {
+        description: 'Customer-facing package name, for example Starter, Bronze, Business, or Premium.',
+        key: 'packageName',
+        label: 'Package Name',
+        type: 'text',
+      },
+      {
+        description: 'Optional package code. Leave blank to auto-generate from the service and package name.',
+        key: 'packageCode',
+        label: 'Package Code',
+        type: 'text',
+      },
+      {
+        description: 'Short summary shown to help users understand this package quickly.',
+        key: 'shortDescription',
+        label: 'Short Description',
+        type: 'text',
+      },
+      {
+        description: 'Flexible JSON object for package details, for example {"storage":"20 GB","emails":"10"}. You can paste pretty JSON here.',
+        key: 'detailsJson',
+        label: 'Details JSON',
+        multiline: true,
+        type: 'text',
+      },
+      {
+        description: 'Feature highlights shown to users. Separate each highlight with "|" characters or put one highlight per line.',
+        key: 'featureBulletsText',
+        label: 'Feature Highlights',
+        multiline: true,
+        type: 'text',
+      },
+      {
+        description: 'Display order in package lists. Lower numbers appear first.',
+        key: 'displayOrder',
+        label: 'Display Order',
+        type: 'text',
+      },
+      {
+        description: 'Controls whether this package is active in operations.',
+        key: 'isActive',
+        label: 'Active Status',
+        type: 'boolean',
+      },
+    ];
+
+    return this.openStructuredDraftEditor({
+      title: existingPackage
+        ? ` Edit Package: ${registrar.name} `
+        : ` Add Package: ${registrar.name} `,
+      fields,
+      draft,
+      buildPreviewLines: (currentDraft) => {
+        const selectedService = serviceProducts.find(
+          (service) => service.id === currentDraft.serviceProductId
+        );
+        const generatedPackageCode = selectedService && currentDraft.packageName
+          ? `${selectedService.service_code}_${currentDraft.packageName}`
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, '_')
+              .replace(/^_+|_+$/g, '')
+          : 'Auto-generated on save';
+
+        return [
+          `Registrar: ${registrar.name}`,
+          `Service: ${selectedService ? selectedService.name : 'Not set'}`,
+          `Package Name: ${currentDraft.packageName || 'Not set'}`,
+          `Package Code: ${currentDraft.packageCode || generatedPackageCode}`,
+          `Short Description: ${currentDraft.shortDescription || 'Not set'}`,
+          `Feature Highlights: ${currentDraft.featureBulletsText ? currentDraft.featureBulletsText.replace(/\r?\n/g, ' | ') : 'Not set'}`,
+          `Display Order: ${currentDraft.displayOrder || '0'}`,
+          `Active: ${currentDraft.isActive ? 'Active' : 'Inactive'}`,
+        ];
+      },
+    });
+  }
+
+  async openServicePackagePriceForm(registrar, servicePackage, existingPrice = null) {
+    const draft = createServicePackagePriceDraft(existingPrice);
+    const billingCycleOptions = [
+      {
+        description: 'Used for monthly recurring prices and 1-month billing periods.',
+        label: 'Monthly',
+        value: 'monthly',
+      },
+      {
+        description: 'Used for yearly recurring prices and 12-month billing periods.',
+        label: 'Yearly',
+        value: 'yearly',
+      },
+      {
+        description: 'Used for other billing periods such as quarterly or custom terms.',
+        label: 'Custom',
+        value: 'custom',
+      },
+    ];
+
+    const fields = [
+      {
+        description: 'Billing cycle for this package. Each package keeps a single pricing setup.',
+        key: 'billingCycle',
+        label: 'Billing Cycle',
+        options: billingCycleOptions,
+        type: 'choice',
+      },
+      {
+        description: 'How many months this package price covers. Use 1 for monthly or 12 for yearly.',
+        key: 'billingPeriodMonths',
+        label: 'Billing Months',
+        type: 'text',
+      },
+      {
+        description: 'Optional customer-facing billing label. Leave blank to auto-label from the billing months.',
+        key: 'billingLabel',
+        label: 'Billing Label',
+        type: 'text',
+      },
+      {
+        description: 'KSh price for this package.',
+        key: 'priceKsh',
+        label: 'Package Price',
+        type: 'text',
+      },
+      {
+        description: 'Optional setup fee charged for this package.',
+        key: 'setupFeeKsh',
+        label: 'Setup Fee',
+        type: 'text',
+      },
+      {
+        description: 'Three-letter currency code such as KES.',
+        key: 'currencyCode',
+        label: 'Currency Code',
+        type: 'text',
+      },
+      {
+        description: 'Controls whether this package pricing is active in operations.',
+        key: 'isActive',
+        label: 'Active Status',
+        type: 'boolean',
+      },
+    ];
+
+    return this.openStructuredDraftEditor({
+      title: existingPrice
+        ? ` Edit Package Pricing: ${servicePackage.package_name} `
+        : ` Set Package Pricing: ${servicePackage.package_name} `,
+      fields,
+      draft,
+      buildPreviewLines: (currentDraft) => [
+        `Registrar: ${registrar.name}`,
+        `Package: ${servicePackage.package_name || 'Not set'}`,
+        `Billing: ${currentDraft.billingLabel || formatBillingLabel(currentDraft.billingCycle, currentDraft.billingPeriodMonths)}`,
+        `Cycle: ${currentDraft.billingCycle || 'Not set'}`,
+        `Price: ${formatCurrencyKsh(currentDraft.priceKsh)}`,
+        `Setup Fee: ${formatCurrencyKsh(currentDraft.setupFeeKsh)}`,
+        `Currency: ${currentDraft.currencyCode || 'KES'}`,
+        `Active: ${currentDraft.isActive ? 'Active' : 'Inactive'}`,
+      ],
+    });
+  }
+
+  async openDomainOfferManager() {
+    const registrar = this.getSelectedRegistrar();
+
+    if (!registrar) {
+      this.setStatus('Select a registrar first.', 'warning');
+      return;
+    }
+
+    this.modalActive = true;
+
+    try {
+      const loadedData = await this.withLoading(
+        `Loading domain offers for ${registrar.name}...`,
+        async () =>
+          Promise.all([
+            adminService.listDomainExtensions(),
+            adminService.listRegistrarDomainOfferings(registrar.id),
+          ])
+      );
+
+      if (!loadedData) {
+        return;
+      }
+
+      let [domainExtensions, offerings] = loadedData;
+      let changed = false;
+
+      const managerResult = await new Promise((resolve) => {
+        const modal = blessed.box({
+          parent: this.screen,
+          top: 'center',
+          left: 'center',
+          width: '92%',
+          height: '86%',
+          border: 'line',
+          label: ` Domain Offers: ${registrar.name} `,
+          style: {
+            bg: 'black',
+            fg: 'white',
+            border: {
+              fg: 'cyan',
+            },
+          },
+        });
+
+        const listPanel = blessed.box({
+          parent: modal,
+          top: 0,
+          left: 0,
+          width: '64%',
+          bottom: 3,
+          border: 'line',
+          label: ' Offers ',
+          style: {
+            border: {
+              fg: 'green',
+            },
+          },
+        });
+
+        const detailsPanel = blessed.box({
+          parent: modal,
+          top: 0,
+          left: '64%',
+          width: '36%',
+          bottom: 3,
+          border: 'line',
+          label: ' Offer Details ',
+          alwaysScroll: true,
+          keys: true,
+          mouse: true,
+          scrollable: true,
+          vi: true,
+          style: {
+            border: {
+              fg: 'yellow',
+            },
+          },
+        });
+
+        blessed.box({
+          parent: modal,
+          top: 0,
+          left: 1,
+          right: 1,
+          height: 1,
+          content: `${pad('Extension', 16)} ${pad('Billing', 10)} ${pad('Register', 14)} ${pad('Renew', 14)} ${pad('Status', 10)}`,
+          style: {
+            bold: true,
+            fg: 'white',
+          },
+        });
+
+        const list = blessed.list({
+          parent: listPanel,
+          top: 1,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          alwaysScroll: true,
+          keys: true,
+          vi: true,
+          mouse: true,
+          scrollable: true,
+          scrollbar: {
+            ch: ' ',
+            style: {
+              bg: 'green',
+            },
+          },
+          style: {
+            selected: {
+              bg: 'green',
+              fg: 'black',
+              bold: true,
+            },
+          },
+          items: [],
+        });
+
+        const getSelectedOffer = () => {
+          if (!offerings.length) {
+            return null;
+          }
+
+          return offerings[Math.max(0, Math.min(list.selected || 0, offerings.length - 1))];
+        };
+
+        const renderList = () => {
+          list.setItems(
+            offerings.length
+              ? offerings.map(
+                  (offer) =>
+                    `${pad(offer.extension || '—', 16)} ${pad(formatBillingLabel(null, offer.billing_period_months), 10)} ${pad(formatCurrencyKsh(offer.registration_price_ksh), 14)} ${pad(formatCurrencyKsh(offer.renewal_price_ksh), 14)} ${pad(offer.is_active ? 'ACTIVE' : 'INACTIVE', 10)}`
+                )
+              : ['No domain offers yet. Press "a" to add one.']
+          );
+        };
+
+        const renderDetails = (selectedIndex) => {
+          if (!offerings.length) {
+            detailsPanel.setContent(
+              [
+                '',
+                ` Registrar: ${registrar.name}`,
+                '',
+                ' No domain offers have been added yet.',
+                '',
+                ' Actions:',
+                '  a  Add a domain offer',
+                '  r  Refresh list',
+                '  x  Close manager',
+              ].join('\n')
+            );
+            return;
+          }
+
+          const offer = offerings[selectedIndex];
+
+          detailsPanel.setContent(
+            [
+              '',
+              ` Extension: ${offer.extension_label} (${offer.extension})`,
+              ` Billing: ${formatBillingLabel(null, offer.billing_period_months)}`,
+              ` Registration Price: ${formatCurrencyKsh(offer.registration_price_ksh)}`,
+              ` Renewal Price: ${formatCurrencyKsh(offer.renewal_price_ksh)}`,
+              ` Transfer Price: ${formatCurrencyKsh(offer.transfer_price_ksh)}`,
+              ` Active: ${formatBoolean(offer.is_active)}`,
+              ` Updated At: ${formatDateTime(offer.updated_at)}`,
+              '',
+              ' Actions:',
+              '  a  Add another domain offer',
+              '  e  Edit selected domain offer',
+              '  t  Toggle active / inactive',
+              '  r  Refresh list',
+              '  x  Close manager',
+            ].join('\n')
+          );
+        };
+
+        const close = () => {
+          modal.detach();
+          this.screen.restoreFocus();
+          this.screen.render();
+          resolve({ changed });
+        };
+
+        const refreshOfferings = async () => {
+          const refreshed = await this.withLoading(
+            `Refreshing domain offers for ${registrar.name}...`,
+            async () => adminService.listRegistrarDomainOfferings(registrar.id)
+          );
+
+          if (!refreshed) {
+            return;
+          }
+
+          offerings = refreshed;
+          renderList();
+          const selectedIndex = this.getClampedSelectedIndex('registrars', offerings.length);
+          if (offerings.length) {
+            list.select(Math.min(list.selected || 0, offerings.length - 1));
+            renderDetails(Math.min(list.selected || 0, offerings.length - 1));
+          } else {
+            renderDetails(0);
+          }
+          this.screen.render();
+        };
+
+        const editOffer = async (existingOffer = null) => {
+          const draft = await this.openDomainOfferingForm(
+            registrar,
+            domainExtensions,
+            existingOffer
+          );
+
+          if (!draft) {
+            this.setStatus('Domain offer edit cancelled.', 'warning');
+            return;
+          }
+
+          const savedOffers = await this.withLoading(
+            existingOffer ? 'Updating domain offer...' : 'Creating domain offer...',
+            async () => adminService.saveRegistrarDomainOffering(registrar.id, draft)
+          );
+
+          if (!savedOffers) {
+            return;
+          }
+
+          offerings = savedOffers;
+          changed = true;
+          renderList();
+          if (offerings.length) {
+            const nextIndex = existingOffer
+              ? Math.max(
+                  0,
+                  offerings.findIndex((offer) => offer.id === existingOffer.id)
+                )
+              : offerings.length - 1;
+            list.select(nextIndex >= 0 ? nextIndex : 0);
+            renderDetails(list.selected || 0);
+          } else {
+            renderDetails(0);
+          }
+          this.setStatus(`Saved domain offer for ${registrar.name}.`, 'success');
+          this.screen.render();
+        };
+
+        const toggleOffer = async () => {
+          const selectedOffer = getSelectedOffer();
+
+          if (!selectedOffer) {
+            this.setStatus('Select a domain offer first.', 'warning');
+            return;
+          }
+
+          const confirmed = await this.askConfirmation(
+            `Toggle ${selectedOffer.extension} ${formatBillingLabel(null, selectedOffer.billing_period_months)} to ${selectedOffer.is_active ? 'inactive' : 'active'}?`
+          );
+
+          if (!confirmed) {
+            this.setStatus('Domain offer toggle cancelled.', 'warning');
+            return;
+          }
+
+          const savedOffers = await this.withLoading(
+            'Updating domain offer status...',
+            async () =>
+              adminService.toggleRegistrarDomainOfferingActive(
+                registrar.id,
+                selectedOffer.id
+              )
+          );
+
+          if (!savedOffers) {
+            return;
+          }
+
+          offerings = savedOffers;
+          changed = true;
+          renderList();
+          if (offerings.length) {
+            list.select(Math.max(0, Math.min(list.selected || 0, offerings.length - 1)));
+            renderDetails(list.selected || 0);
+          } else {
+            renderDetails(0);
+          }
+          this.setStatus(`Updated domain offer status for ${registrar.name}.`, 'success');
+          this.screen.render();
+        };
+
+        modal.key(['escape', 'x'], () => close());
+        detailsPanel.key(['escape', 'x'], () => close());
+        list.key(['escape', 'x'], () => close());
+        modal.key(['a'], async () => editOffer(null));
+        list.key(['a'], async () => editOffer(null));
+        modal.key(['e'], async () => editOffer(getSelectedOffer()));
+        list.key(['e'], async () => editOffer(getSelectedOffer()));
+        modal.key(['t'], async () => toggleOffer());
+        list.key(['t'], async () => toggleOffer());
+        modal.key(['r'], async () => refreshOfferings());
+        list.key(['r'], async () => refreshOfferings());
+
+        list.on('select item', (_, index) => {
+          renderDetails(index);
+          this.screen.render();
+        });
+
+        this.screen.saveFocus();
+        renderList();
+        list.focus();
+        list.select(0);
+        renderDetails(0);
+        this.screen.render();
+      });
+
+      if (managerResult && managerResult.changed) {
+        await this.withLoading('Refreshing registrar summaries...', async () => {
+          await this.refreshRegistrarsState();
+        });
+      }
+    } catch (error) {
+      this.setStatus(error.message, 'error');
+    } finally {
+      this.modalActive = false;
+      this.screen.render();
+    }
+  }
+
+  async openServicePackagePriceManager(registrar, servicePackage) {
+    const loadedPrices = await this.withLoading(
+      `Loading package pricing for ${servicePackage.package_name}...`,
+      async () =>
+        adminService.listRegistrarServicePackagePrices(registrar.id, servicePackage.id)
+    );
+
+    if (!loadedPrices) {
+      return { changed: false };
+    }
+
+    let prices = loadedPrices;
+    let changed = false;
+
+    return new Promise((resolve) => {
+      const modal = blessed.box({
+        parent: this.screen,
+        top: 'center',
+        left: 'center',
+        width: '90%',
+        height: '82%',
+        border: 'line',
+        label: ` Billing Options: ${servicePackage.package_name} `,
+        style: {
+          bg: 'black',
+          fg: 'white',
+          border: {
+            fg: 'cyan',
+          },
+        },
+      });
+
+      const listPanel = blessed.box({
+        parent: modal,
+        top: 0,
+        left: 0,
+        width: '64%',
+        bottom: 3,
+        border: 'line',
+        label: ' Prices ',
+        style: {
+          border: {
+            fg: 'green',
+          },
+        },
+      });
+
+      const detailsPanel = blessed.box({
+        parent: modal,
+        top: 0,
+        left: '64%',
+        width: '36%',
+        bottom: 3,
+        border: 'line',
+        label: ' Price Details ',
+        alwaysScroll: true,
+        keys: true,
+        mouse: true,
+        scrollable: true,
+        vi: true,
+        style: {
+          border: {
+            fg: 'yellow',
+          },
+        },
+      });
+
+      blessed.box({
+        parent: modal,
+        top: 0,
+        left: 1,
+        right: 1,
+        height: 1,
+        content: `${pad('Billing', 12)} ${pad('Label', 18)} ${pad('Price', 14)} ${pad('Default', 8)} ${pad('Status', 10)}`,
+        style: {
+          bold: true,
+          fg: 'white',
+        },
+      });
+
+      const list = blessed.list({
+        parent: listPanel,
+        top: 1,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        alwaysScroll: true,
+        keys: true,
+        vi: true,
+        mouse: true,
+        scrollable: true,
+        scrollbar: {
+          ch: ' ',
+          style: {
+            bg: 'green',
+          },
+        },
+        style: {
+          selected: {
+            bg: 'green',
+            fg: 'black',
+            bold: true,
+          },
+        },
+        items: [],
+      });
+
+      const getSelectedPrice = () => {
+        if (!prices.length) {
+          return null;
+        }
+
+        return prices[Math.max(0, Math.min(list.selected || 0, prices.length - 1))];
+      };
+
+      const renderList = () => {
+        list.setItems(
+          prices.length
+            ? prices.map(
+                (price) =>
+                  `${pad(formatBillingLabel(price.billing_cycle, price.billing_period_months), 12)} ${pad(price.billing_label || 'Auto', 18)} ${pad(formatCurrencyKsh(price.price_ksh), 14)} ${pad(price.is_default ? 'YES' : 'NO', 8)} ${pad(price.is_active ? 'ACTIVE' : 'INACTIVE', 10)}`
+              )
+            : ['No package pricing yet. Press "a" to add one.']
+        );
+      };
+
+        const renderDetails = (selectedIndex) => {
+          if (!prices.length) {
+            detailsPanel.setContent(
+              [
+                '',
+                ` Registrar: ${registrar.name}`,
+                ` Package: ${servicePackage.package_name}`,
+                ` Service: ${toDisplay(servicePackage.service_name)}`,
+                '',
+                ' No package pricing has been added yet.',
+                '',
+                ' Actions:',
+              '  a  Add package pricing',
+              '  r  Refresh list',
+              '  x  Close manager',
+            ].join('\n')
+          );
+          return;
+        }
+
+        const price = prices[selectedIndex];
+
+        detailsPanel.setContent(
+          [
+            '',
+            ` Package: ${servicePackage.package_name}`,
+            ` Service: ${toDisplay(servicePackage.service_name)}`,
+            ` Service Category: ${toDisplay(servicePackage.service_category)}`,
+            ` Package Active: ${formatBoolean(servicePackage.is_active)}`,
+            ` Billing: ${formatBillingLabel(price.billing_cycle, price.billing_period_months)}`,
+            ` Billing Label: ${toDisplay(price.billing_label)}`,
+            ` Billing Cycle: ${toDisplay(price.billing_cycle)}`,
+            ` Billing Months: ${toDisplay(price.billing_period_months)}`,
+            ` Price: ${formatCurrencyKsh(price.price_ksh)}`,
+            ` Setup Fee: ${formatCurrencyKsh(price.setup_fee_ksh)}`,
+            ` Currency: ${toDisplay(price.currency_code)}`,
+            ` Default: ${formatBoolean(price.is_default)}`,
+            ` Active: ${formatBoolean(price.is_active)}`,
+            ` Updated At: ${formatDateTime(price.updated_at)}`,
+            '',
+              ' Actions:',
+              '  a  Replace package pricing',
+              '  e  Edit package pricing',
+              '  D  Delete package pricing',
+              '  t  Toggle active / inactive',
+              '  r  Refresh list',
+              '  x  Close manager',
+          ].join('\n')
+        );
+      };
+
+      const close = () => {
+        modal.detach();
+        this.screen.restoreFocus();
+        this.screen.render();
+        resolve({ changed });
+      };
+
+      const refreshPrices = async () => {
+        const refreshed = await this.withLoading(
+          `Refreshing package pricing for ${servicePackage.package_name}...`,
+          async () =>
+            adminService.listRegistrarServicePackagePrices(registrar.id, servicePackage.id)
+        );
+
+        if (!refreshed) {
+          return;
+        }
+
+        prices = refreshed;
+        renderList();
+        if (prices.length) {
+          list.select(Math.max(0, Math.min(list.selected || 0, prices.length - 1)));
+          renderDetails(list.selected || 0);
+        } else {
+          renderDetails(0);
+        }
+        this.screen.render();
+      };
+
+      const editPrice = async (existingPrice = null) => {
+        const draft = await this.openServicePackagePriceForm(
+          registrar,
+          servicePackage,
+          existingPrice
+        );
+
+        if (!draft) {
+          this.setStatus('Package pricing edit cancelled.', 'warning');
+          return;
+        }
+
+        const savedPrices = await this.withLoading(
+          existingPrice ? 'Updating package pricing...' : 'Saving package pricing...',
+          async () =>
+            adminService.saveRegistrarServicePackagePrice(
+              registrar.id,
+              servicePackage.id,
+              draft
+            )
+        );
+
+        if (!savedPrices) {
+          return;
+        }
+
+        prices = savedPrices;
+        changed = true;
+        renderList();
+        if (prices.length) {
+          const nextIndex = existingPrice
+            ? Math.max(0, prices.findIndex((price) => price.id === existingPrice.id))
+            : prices.length - 1;
+          list.select(nextIndex >= 0 ? nextIndex : 0);
+          renderDetails(list.selected || 0);
+        } else {
+          renderDetails(0);
+        }
+        this.setStatus(`Saved package pricing for ${servicePackage.package_name}.`, 'success');
+        this.screen.render();
+      };
+
+      const togglePrice = async () => {
+        const selectedPrice = getSelectedPrice();
+
+        if (!selectedPrice) {
+          this.setStatus('Select package pricing first.', 'warning');
+          return;
+        }
+
+        const confirmed = await this.askConfirmation(
+          `Toggle ${formatBillingLabel(selectedPrice.billing_cycle, selectedPrice.billing_period_months)} to ${selectedPrice.is_active ? 'inactive' : 'active'}?`
+        );
+
+        if (!confirmed) {
+          this.setStatus('Package pricing toggle cancelled.', 'warning');
+          return;
+        }
+
+        const savedPrices = await this.withLoading(
+          'Updating package pricing status...',
+          async () =>
+            adminService.toggleRegistrarServicePackagePriceActive(
+              registrar.id,
+              servicePackage.id,
+              selectedPrice.id
+            )
+        );
+
+        if (!savedPrices) {
+          return;
+        }
+
+        prices = savedPrices;
+        changed = true;
+        renderList();
+        if (prices.length) {
+          list.select(Math.max(0, Math.min(list.selected || 0, prices.length - 1)));
+          renderDetails(list.selected || 0);
+        } else {
+          renderDetails(0);
+        }
+        this.setStatus(`Updated package pricing status for ${servicePackage.package_name}.`, 'success');
+        this.screen.render();
+      };
+
+      const deletePrice = async () => {
+        const selectedPrice = getSelectedPrice();
+
+        if (!selectedPrice) {
+          this.setStatus('Select package pricing first.', 'warning');
+          return;
+        }
+
+        const confirmed = await this.askConfirmation(
+          `Delete ${formatBillingLabel(selectedPrice.billing_cycle, selectedPrice.billing_period_months)} pricing from ${servicePackage.package_name}?`
+        );
+
+        if (!confirmed) {
+          this.setStatus('Package pricing delete cancelled.', 'warning');
+          return;
+        }
+
+        const savedPrices = await this.withLoading(
+          'Deleting package pricing...',
+          async () =>
+            adminService.deleteRegistrarServicePackagePrice(
+              registrar.id,
+              servicePackage.id,
+              selectedPrice.id
+            )
+        );
+
+        if (!savedPrices) {
+          return;
+        }
+
+        prices = savedPrices;
+        changed = true;
+        renderList();
+        if (prices.length) {
+          list.select(Math.max(0, Math.min(list.selected || 0, prices.length - 1)));
+          renderDetails(list.selected || 0);
+        } else {
+          renderDetails(0);
+        }
+        this.setStatus(`Deleted package pricing from ${servicePackage.package_name}.`, 'success');
+        this.screen.render();
+      };
+
+      modal.key(['escape', 'x'], () => close());
+      detailsPanel.key(['escape', 'x'], () => close());
+      list.key(['escape', 'x'], () => close());
+      modal.key(['a'], async () => editPrice(null));
+      list.key(['a'], async () => editPrice(null));
+      modal.key(['D'], async () => deletePrice());
+      list.key(['D'], async () => deletePrice());
+      modal.key(['e'], async () => editPrice(getSelectedPrice()));
+      list.key(['e'], async () => editPrice(getSelectedPrice()));
+      modal.key(['t'], async () => togglePrice());
+      list.key(['t'], async () => togglePrice());
+      modal.key(['r'], async () => refreshPrices());
+      list.key(['r'], async () => refreshPrices());
+
+      list.on('select item', (_, index) => {
+        renderDetails(index);
+        this.screen.render();
+      });
+
+      this.screen.saveFocus();
+      renderList();
+      list.focus();
+      list.select(0);
+      renderDetails(0);
+      this.screen.render();
+    });
+  }
+
+  async openServicePackageManager() {
+    const registrar = this.getSelectedRegistrar();
+
+    if (!registrar) {
+      this.setStatus('Select a registrar first.', 'warning');
+      return;
+    }
+
+    this.modalActive = true;
+
+    try {
+      const loadedData = await this.withLoading(
+        `Loading packages for ${registrar.name}...`,
+        async () =>
+          Promise.all([
+            adminService.listServiceProducts(),
+            adminService.listRegistrarServicePackages(registrar.id),
+          ])
+      );
+
+      if (!loadedData) {
+        return;
+      }
+
+      const [serviceProducts, initialPackages] = loadedData;
+      let packages = initialPackages;
+      let changed = false;
+
+      const managerResult = await new Promise((resolve) => {
+        const modal = blessed.box({
+          parent: this.screen,
+          top: 'center',
+          left: 'center',
+          width: '92%',
+          height: '86%',
+          border: 'line',
+          label: ` Packages: ${registrar.name} `,
+          style: {
+            bg: 'black',
+            fg: 'white',
+            border: {
+              fg: 'cyan',
+            },
+          },
+        });
+
+        const listPanel = blessed.box({
+          parent: modal,
+          top: 0,
+          left: 0,
+          width: '64%',
+          bottom: 3,
+          border: 'line',
+          label: ' Packages ',
+          style: {
+            border: {
+              fg: 'green',
+            },
+          },
+        });
+
+        const detailsPanel = blessed.box({
+          parent: modal,
+          top: 0,
+          left: '64%',
+          width: '36%',
+          bottom: 3,
+          border: 'line',
+          label: ' Package Details ',
+          alwaysScroll: true,
+          keys: true,
+          mouse: true,
+          scrollable: true,
+          vi: true,
+          style: {
+            border: {
+              fg: 'yellow',
+            },
+          },
+        });
+
+        blessed.box({
+          parent: modal,
+          top: 0,
+          left: 1,
+          right: 1,
+          height: 1,
+          content: `${pad('Service', 15)} ${pad('Package', 18)} ${pad('Default Billing', 14)} ${pad('Default Price', 14)} ${pad('Prices', 6)} ${pad('Status', 10)}`,
+          style: {
+            bold: true,
+            fg: 'white',
+          },
+        });
+
+        const list = blessed.list({
+          parent: listPanel,
+          top: 1,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          alwaysScroll: true,
+          keys: true,
+          vi: true,
+          mouse: true,
+          scrollable: true,
+          scrollbar: {
+            ch: ' ',
+            style: {
+              bg: 'green',
+            },
+          },
+          style: {
+            selected: {
+              bg: 'green',
+              fg: 'black',
+              bold: true,
+            },
+          },
+          items: [],
+        });
+
+        const getSelectedPackage = () => {
+          if (!packages.length) {
+            return null;
+          }
+
+          return packages[Math.max(0, Math.min(list.selected || 0, packages.length - 1))];
+        };
+
+        const renderList = () => {
+          list.setItems(
+            packages.length
+              ? packages.map(
+                  (servicePackage) =>
+                    `${pad(servicePackage.service_name || '—', 15)} ${pad(servicePackage.package_name || '—', 18)} ${pad(formatPackageDefaultBilling(servicePackage), 14)} ${pad(formatPackageDefaultPrice(servicePackage), 14)} ${pad(servicePackage.price_count, 6)} ${pad(servicePackage.is_active ? 'ACTIVE' : 'INACTIVE', 10)}`
+                )
+              : ['No packages yet. Press "a" to add one.']
+          );
+        };
+
+        const renderDetails = (selectedIndex) => {
+          if (!packages.length) {
+            detailsPanel.setContent(
+              [
+                '',
+                ` Registrar: ${registrar.name}`,
+                '',
+                ' No service packages have been added yet.',
+                ...(serviceProducts.length
+                  ? []
+                  : [
+                      '',
+                      ' No service products are configured yet.',
+                      ' Packages need a service before they can be created.',
+                    ]),
+                '',
+                ' Actions:',
+                '  a  Add a package',
+                '  r  Refresh list',
+                '  x  Close manager',
+              ].join('\n')
+            );
+            return;
+          }
+
+          const servicePackage = packages[selectedIndex];
+
+          detailsPanel.setContent(
+            [
+              '',
+              ` Service: ${servicePackage.service_name}`,
+              ` Service Category: ${toDisplay(servicePackage.service_category)}`,
+              ` Package Name: ${servicePackage.package_name}`,
+              ` Package Code: ${servicePackage.package_code}`,
+              ` Short Description: ${toDisplay(servicePackage.short_description)}`,
+              ` Display Order: ${toDisplay(servicePackage.display_order)}`,
+              ` Default Price: ${formatPackageDefaultPrice(servicePackage)}`,
+              ` Default Billing: ${formatPackageDefaultBilling(servicePackage)}`,
+              ` Default Currency: ${toDisplay(servicePackage.default_currency_code)}`,
+              ` Active Pricing Records: ${toDisplay(servicePackage.active_price_count)}`,
+              ` Total Pricing Records: ${toDisplay(servicePackage.price_count)}`,
+              ` Feature Highlights: ${formatFeatureHighlights(servicePackage.feature_bullets_json)}`,
+              ` Details JSON: ${formatJson(servicePackage.details_json)}`,
+              ` Active: ${formatBoolean(servicePackage.is_active)}`,
+              ` Updated At: ${formatDateTime(servicePackage.updated_at)}`,
+              '',
+              ' Actions:',
+              '  a  Add another package',
+              '  d  Delete selected package',
+              '  e  Edit selected package',
+              '  v  Manage package pricing',
+              '  t  Toggle active / inactive',
+              '  r  Refresh list',
+              '  x  Close manager',
+            ].join('\n')
+          );
+        };
+
+        const close = () => {
+          modal.detach();
+          this.screen.restoreFocus();
+          this.screen.render();
+          resolve({ changed });
+        };
+
+        const refreshPackages = async () => {
+          const refreshed = await this.withLoading(
+            `Refreshing packages for ${registrar.name}...`,
+            async () => adminService.listRegistrarServicePackages(registrar.id)
+          );
+
+          if (!refreshed) {
+            return;
+          }
+
+          packages = refreshed;
+          renderList();
+          if (packages.length) {
+            list.select(Math.max(0, Math.min(list.selected || 0, packages.length - 1)));
+            renderDetails(list.selected || 0);
+          } else {
+            renderDetails(0);
+          }
+          this.screen.render();
+        };
+
+        const editPackage = async (existingPackage = null) => {
+          if (!serviceProducts.length) {
+            this.setStatus('No service products are configured yet, so packages cannot be created.', 'warning');
+            return;
+          }
+
+          const draft = await this.openServicePackageForm(
+            registrar,
+            serviceProducts,
+            existingPackage
+          );
+
+          if (!draft) {
+            this.setStatus('Package edit cancelled.', 'warning');
+            return;
+          }
+
+          const savedPackages = await this.withLoading(
+            existingPackage ? 'Updating package...' : 'Creating package...',
+            async () => adminService.saveRegistrarServicePackage(registrar.id, draft)
+          );
+
+          if (!savedPackages) {
+            return;
+          }
+
+          packages = savedPackages;
+          changed = true;
+          renderList();
+          if (packages.length) {
+            const nextIndex = existingPackage
+              ? Math.max(0, packages.findIndex((item) => item.id === existingPackage.id))
+              : packages.length - 1;
+            list.select(nextIndex >= 0 ? nextIndex : 0);
+            renderDetails(list.selected || 0);
+          } else {
+            renderDetails(0);
+          }
+          this.setStatus(`Saved package for ${registrar.name}.`, 'success');
+          this.screen.render();
+        };
+
+        const togglePackage = async () => {
+          const selectedPackage = getSelectedPackage();
+
+          if (!selectedPackage) {
+            this.setStatus('Select a package first.', 'warning');
+            return;
+          }
+
+          const confirmed = await this.askConfirmation(
+            `Toggle ${selectedPackage.package_name} to ${selectedPackage.is_active ? 'inactive' : 'active'}?`
+          );
+
+          if (!confirmed) {
+            this.setStatus('Package toggle cancelled.', 'warning');
+            return;
+          }
+
+          const savedPackages = await this.withLoading(
+            'Updating package status...',
+            async () =>
+              adminService.toggleRegistrarServicePackageActive(
+                registrar.id,
+                selectedPackage.id
+              )
+          );
+
+          if (!savedPackages) {
+            return;
+          }
+
+          packages = savedPackages;
+          changed = true;
+          renderList();
+          if (packages.length) {
+            list.select(Math.max(0, Math.min(list.selected || 0, packages.length - 1)));
+            renderDetails(list.selected || 0);
+          } else {
+            renderDetails(0);
+          }
+          this.setStatus(`Updated package status for ${registrar.name}.`, 'success');
+          this.screen.render();
+        };
+
+        const deletePackage = async () => {
+          const selectedPackage = getSelectedPackage();
+
+          if (!selectedPackage) {
+            this.setStatus('Select a package first.', 'warning');
+            return;
+          }
+
+          const confirmed = await this.askConfirmation(
+            `Delete ${selectedPackage.package_name} and its ${selectedPackage.price_count || 0} pricing record(s)?`
+          );
+
+          if (!confirmed) {
+            this.setStatus('Package delete cancelled.', 'warning');
+            return;
+          }
+
+          const savedPackages = await this.withLoading(
+            'Deleting package...',
+            async () =>
+              adminService.deleteRegistrarServicePackage(
+                registrar.id,
+                selectedPackage.id
+              )
+          );
+
+          if (!savedPackages) {
+            return;
+          }
+
+          packages = savedPackages;
+          changed = true;
+          renderList();
+          if (packages.length) {
+            list.select(Math.max(0, Math.min(list.selected || 0, packages.length - 1)));
+            renderDetails(list.selected || 0);
+          } else {
+            renderDetails(0);
+          }
+          this.setStatus(`Deleted package from ${registrar.name}.`, 'success');
+          this.screen.render();
+        };
+
+        const managePrices = async () => {
+          const selectedPackage = getSelectedPackage();
+
+          if (!selectedPackage) {
+            this.setStatus('Select a package first.', 'warning');
+            return;
+          }
+
+          const priceManagerResult = await this.openServicePackagePriceManager(
+            registrar,
+            selectedPackage
+          );
+
+          if (priceManagerResult && priceManagerResult.changed) {
+            changed = true;
+            await refreshPackages();
+          }
+        };
+
+        modal.key(['escape', 'x'], () => close());
+        detailsPanel.key(['escape', 'x'], () => close());
+        list.key(['escape', 'x'], () => close());
+        modal.key(['a'], async () => editPackage(null));
+        list.key(['a'], async () => editPackage(null));
+        modal.key(['d'], async () => deletePackage());
+        list.key(['d'], async () => deletePackage());
+        modal.key(['e'], async () => editPackage(getSelectedPackage()));
+        list.key(['e'], async () => editPackage(getSelectedPackage()));
+        modal.key(['v'], async () => managePrices());
+        list.key(['v'], async () => managePrices());
+        modal.key(['t'], async () => togglePackage());
+        list.key(['t'], async () => togglePackage());
+        modal.key(['r'], async () => refreshPackages());
+        list.key(['r'], async () => refreshPackages());
+
+        list.on('select item', (_, index) => {
+          renderDetails(index);
+          this.screen.render();
+        });
+
+        this.screen.saveFocus();
+        renderList();
+        list.focus();
+        list.select(0);
+        renderDetails(0);
+        this.screen.render();
+      });
+
+      if (managerResult && managerResult.changed) {
+        await this.withLoading('Refreshing registrar summaries...', async () => {
+          await this.refreshRegistrarsState();
+        });
+      }
     } catch (error) {
       this.setStatus(error.message, 'error');
     } finally {
