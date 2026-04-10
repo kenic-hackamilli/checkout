@@ -8,6 +8,9 @@ exports.createRegistration = async (req, res) => {
   const payload = normalizeRegistrationInput(req.body);
 
   console.log('---- ORDER RECEIVED ----', {
+    full_name: payload.full_name,
+    email: payload.email,
+    phone: payload.phone,
     domain_name: payload.domain_name,
     domain_extension: payload.domain_extension,
     package_name: payload.package_name || null,

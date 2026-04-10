@@ -127,17 +127,17 @@ async function updateDeliveryLog({
   const query = `
     UPDATE delivery_logs
     SET attempts = $2,
-        status = $3,
-        last_response = $4,
+        status = $3::varchar(20),
+        last_response = $4::text,
         last_error = CASE
-          WHEN $3 = 'success' OR $3 = 'skipped' THEN NULL
-          ELSE $5
+          WHEN $3::text = 'success' OR $3::text = 'skipped' THEN NULL
+          ELSE $5::text
         END,
-        provider_reference = COALESCE($6, provider_reference),
+        provider_reference = COALESCE($6::varchar(255), provider_reference),
         first_attempted_at = COALESCE(first_attempted_at, CURRENT_TIMESTAMP),
         last_attempted_at = CURRENT_TIMESTAMP,
         delivered_at = CASE
-          WHEN $3 = 'success' THEN CURRENT_TIMESTAMP
+          WHEN $3::text = 'success' THEN CURRENT_TIMESTAMP
           ELSE delivered_at
         END,
         updated_at = CURRENT_TIMESTAMP

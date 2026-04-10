@@ -269,7 +269,14 @@ function buildPurchaseCopy(registration) {
 }
 
 function buildRegistrarPayload(registration) {
+  const selectionSnapshot = {
+    ...getRegistrationSnapshot(registration),
+  };
+
+  delete selectionSnapshot.selected_offering_label;
+
   return {
+    order_reference: getPublicRequestReference(registration),
     billing_cycle: registration.billing_cycle || null,
     billing_period_months: registration.billing_period_months || null,
     domain_name: registration.domain_name,
@@ -283,7 +290,7 @@ function buildRegistrarPayload(registration) {
     product_family: registration.product_family || null,
     quoted_price_ksh: registration.quoted_price_ksh || null,
     selection_kind: registration.selection_kind || null,
-    selection_snapshot_json: registration.selection_snapshot_json || {},
+    selection_snapshot_json: selectionSnapshot,
     service_package_id: registration.service_package_id || null,
     service_package_price_id: registration.service_package_price_id || null,
     service_product_code: registration.service_product_code || null,
@@ -379,20 +386,17 @@ function buildTargetServiceValue(registration) {
 
 function buildOrderLogContext(registration) {
   const snapshot = getRegistrationSnapshot(registration);
-  const { formattedDomain, planName, registrarName } = buildCustomerOrderCopy(registration);
+  const { formattedDomain, registrarName } = buildCustomerOrderCopy(registration);
   const packageName =
     normalizeTextValue(registration.package_name) ||
     normalizeTextValue(snapshot.package_name) ||
     null;
-  const selectedOffering =
-    normalizeTextValue(snapshot.selected_offering_label) || planName || packageName;
-  const serviceName =
-    normalizeTextValue(snapshot.service_name) ||
-    normalizeTextValue(registration.service_name) ||
-    null;
 
   return {
     order_reference: getPublicRequestReference(registration),
+    full_name: normalizeTextValue(registration.full_name) || null,
+    email: normalizeTextValue(registration.email) || null,
+    phone: normalizeTextValue(registration.phone) || null,
     domain_name: formattedDomain || normalizeTextValue(registration.domain_name) || null,
     domain_extension:
       normalizeTextValue(registration.domain_extension) ||
@@ -400,9 +404,7 @@ function buildOrderLogContext(registration) {
       null,
     registrar_name: registrarName,
     target_service: buildTargetServiceValue(registration),
-    service_name: serviceName,
     package_name: packageName,
-    selected_offering: selectedOffering || null,
     period: getBillingLabel({
       billingCycle: registration.billing_cycle,
       billingLabel: normalizeTextValue(snapshot.billing_label),

@@ -126,9 +126,9 @@ The registration flow now logs the main lifecycle using clearer order-focused ch
 
 The normalized order log now prioritizes:
 
-- `target_service` as the specific service code when available, for example `vps_hosting`
-- `package_name` as the chosen package, for example `Cloud 2`
-- `selected_offering` as the best human-readable summary of what the customer picked
+- `full_name`, `email`, and `phone` from the normalized customer payload
+- `target_service` as the canonical machine-readable service code, for example `vps_hosting`
+- `package_name` as the chosen package label, for example `Cloud 2`
 
 Delivery summaries also include per-channel:
 
@@ -203,6 +203,8 @@ This applies to:
 ### Registrar Endpoint Interpretation
 
 The registrar push is considered successful only when the registrar endpoint returns an HTTP `2xx` response.
+
+The registrar push payload now includes the public `order_reference` alongside the customer, domain, pricing, and selection fields. See `registrarModule.txt` for the registrar-facing contract and receiver guidance.
 
 Current interpretation rules:
 
