@@ -1,5 +1,10 @@
 const pool = require('../db');
 const registrationService = require('../services/registrationService');
+const { isEmailConfigured, sendEmail } = require('../services/email');
+const { env: domainUpdaterEnv } = require('../domainUpdater/src/config/env');
+const {
+  createPrimaryRegistrarApiKey,
+} = require('../domainUpdater/src/services/registrarApiKeyService');
 const {
   isValidExternalRequestId,
   normalizeExternalRequestId,
@@ -16,6 +21,10 @@ function normalizeNullableString(value) {
 
 function isValidEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function isValidPhone(value) {
+  return /^[0-9+().\-\s]{7,25}$/.test(value);
 }
 
 function slugify(value) {
@@ -56,10 +65,116 @@ function getBillingCycleFromMonths(billingPeriodMonths) {
   return 'custom';
 }
 
+function buildPortalAccessUrl() {
+  const normalizedUrl = normalizeNullableString(domainUpdaterEnv.publicUrl);
+
+  if (!normalizedUrl) {
+    return null;
+  }
+
+  return normalizedUrl.endsWith('/') ? normalizedUrl : `${normalizedUrl}/`;
+}
+
+function buildRegistrarOnboardingEmail({ expiresAt, registrar, apiKey }) {
+  const portalUrl = buildPortalAccessUrl();
+  const expiresLine = expiresAt
+    ? `This key is scheduled to expire on ${new Date(expiresAt).toUTCString()}.`
+    : 'This key remains active until an administrator rotates it.';
+  const subject = `${registrar.name} portal access is ready`;
+  const textLines = [
+    `Hello ${registrar.name},`,
+    '',
+    'You have been successfully onboarded to DomainUpdater.',
+    '',
+    'Your private registrar login API key is:',
+    apiKey,
+    '',
+    'This credential is private and confidential. Store it securely and do not share it outside your registrar team.',
+    expiresLine,
+    'When you enter this key in the portal, a one-time password will be sent automatically to your registered email and/or phone number.',
+  ];
+
+  if (portalUrl) {
+    textLines.push('', `Portal URL: ${portalUrl}`);
+  }
+
+  textLines.push(
+    '',
+    'If you believe this message reached you in error, contact the checkout admin team immediately.'
+  );
+
+  const htmlSections = [
+    `<p>Hello ${registrar.name},</p>`,
+    '<p>You have been successfully onboarded to <strong>DomainUpdater</strong>.</p>',
+    '<p>Your private registrar login API key is:</p>',
+    `<p style="font-size:18px;font-weight:700;letter-spacing:0.06em;padding:14px 18px;border-radius:12px;background:#eef3ff;color:#10203d;display:inline-block;">${apiKey}</p>`,
+    '<p><strong>Private and confidential:</strong> store this credential securely and do not share it outside your registrar team.</p>',
+    `<p>${expiresLine}</p>`,
+    '<p>When you enter this key in the portal, a one-time password will be sent automatically to your registered email and/or phone number.</p>',
+  ];
+
+  if (portalUrl) {
+    htmlSections.push(
+      `<p>Portal URL: <a href="${portalUrl}">${portalUrl}</a></p>`
+    );
+  }
+
+  htmlSections.push(
+    '<p>If you believe this message reached you in error, contact the checkout admin team immediately.</p>'
+  );
+
+  return {
+    html: htmlSections.join(''),
+    subject,
+    text: textLines.join('\n'),
+  };
+}
+
+async function sendRegistrarOnboardingEmail({ registrar, apiKey, expiresAt }) {
+  if (!registrar || !registrar.primary_email) {
+    return {
+      reason: 'missing_primary_email',
+      status: 'skipped',
+    };
+  }
+
+  if (!isEmailConfigured()) {
+    return {
+      destination: registrar.primary_email,
+      reason: 'email_service_not_configured',
+      status: 'skipped',
+    };
+  }
+
+  const emailContent = buildRegistrarOnboardingEmail({ registrar, apiKey, expiresAt });
+
+  try {
+    const delivery = await sendEmail({
+      to: registrar.primary_email,
+      ...emailContent,
+    });
+
+    return {
+      accepted: delivery.accepted,
+      destination: registrar.primary_email,
+      messageId: delivery.messageId,
+      status: 'sent',
+    };
+  } catch (error) {
+    return {
+      destination: registrar.primary_email,
+      reason: error.message,
+      status: 'failed',
+    };
+  }
+}
+
 function normalizeRegistrarInput(payload = {}) {
   return {
     name: normalizeString(payload.name),
     apiEndpoint: normalizeNullableString(payload.apiEndpoint),
+    primaryEmail: normalizeNullableString(payload.primaryEmail),
+    primaryPhone: normalizeNullableString(payload.primaryPhone),
     notificationEmail: normalizeNullableString(payload.notificationEmail),
     isActive: payload.isActive !== false,
   };
@@ -68,6 +183,22 @@ function normalizeRegistrarInput(payload = {}) {
 function validateRegistrarInput(payload) {
   if (!payload.name) {
     throw new Error('Registrar name is required.');
+  }
+
+  if (!payload.primaryEmail) {
+    throw new Error('Registrar primary email is required.');
+  }
+
+  if (!isValidEmail(payload.primaryEmail)) {
+    throw new Error('Registrar primary email must be a valid email address.');
+  }
+
+  if (!payload.primaryPhone) {
+    throw new Error('Registrar primary phone is required.');
+  }
+
+  if (!isValidPhone(payload.primaryPhone)) {
+    throw new Error('Registrar primary phone must be a valid phone number.');
   }
 
   if (payload.apiEndpoint) {
@@ -374,10 +505,20 @@ async function listRegistrars() {
       r.id,
       r.registrar_code,
       r.name,
+      r.primary_email,
+      r.primary_phone,
       r.api_endpoint,
       r.notification_email,
       r.is_active,
       r.created_at,
+      r.updated_at,
+      COALESCE(key_summary.api_key_count, 0)::int AS api_key_count,
+      COALESCE(key_summary.active_api_key_count, 0)::int AS active_api_key_count,
+      key_summary.latest_api_key_prefix,
+      key_summary.latest_api_key_status,
+      key_summary.latest_api_key_expires_at,
+      key_summary.latest_api_key_created_at,
+      key_summary.latest_api_key_last_used_at,
       COALESCE(reg_summary.total_requests, 0)::int AS total_requests,
       COALESCE(reg_summary.processed_requests, 0)::int AS processed_requests,
       COALESCE(domain_summary.domain_extension_count, 0)::int AS domain_extension_count,
@@ -386,6 +527,32 @@ async function listRegistrars() {
       COALESCE(price_summary.service_package_price_count, 0)::int AS service_package_price_count,
       COALESCE(bundle_summary.bundle_count, 0)::int AS bundle_count
     FROM registrars r
+    LEFT JOIN LATERAL (
+      SELECT
+        COUNT(*)::int AS api_key_count,
+        COUNT(*) FILTER (
+          WHERE rak.status = 'active'
+            AND (rak.expires_at IS NULL OR rak.expires_at > CURRENT_TIMESTAMP)
+        )::int AS active_api_key_count,
+        (ARRAY_AGG(rak.key_prefix ORDER BY rak.created_at DESC, rak.id DESC))[1] AS latest_api_key_prefix,
+        (
+          ARRAY_AGG(
+            CASE
+              WHEN rak.status = 'active'
+                AND rak.expires_at IS NOT NULL
+                AND rak.expires_at <= CURRENT_TIMESTAMP
+              THEN 'expired'
+              ELSE rak.status
+            END
+            ORDER BY rak.created_at DESC, rak.id DESC
+          )
+        )[1] AS latest_api_key_status,
+        (ARRAY_AGG(rak.expires_at ORDER BY rak.created_at DESC, rak.id DESC))[1] AS latest_api_key_expires_at,
+        (ARRAY_AGG(rak.created_at ORDER BY rak.created_at DESC, rak.id DESC))[1] AS latest_api_key_created_at,
+        (ARRAY_AGG(rak.last_used_at ORDER BY rak.created_at DESC, rak.id DESC))[1] AS latest_api_key_last_used_at
+      FROM domain_updater.registrar_api_keys rak
+      WHERE rak.registrar_id = r.id
+    ) key_summary ON TRUE
     LEFT JOIN LATERAL (
       SELECT
         COUNT(reg.request_id)::int AS total_requests,
@@ -442,10 +609,20 @@ async function getRegistrarById(registrarId) {
         r.id,
         r.registrar_code,
         r.name,
+        r.primary_email,
+        r.primary_phone,
         r.api_endpoint,
         r.notification_email,
         r.is_active,
         r.created_at,
+        r.updated_at,
+        COALESCE(key_summary.api_key_count, 0)::int AS api_key_count,
+        COALESCE(key_summary.active_api_key_count, 0)::int AS active_api_key_count,
+        key_summary.latest_api_key_prefix,
+        key_summary.latest_api_key_status,
+        key_summary.latest_api_key_expires_at,
+        key_summary.latest_api_key_created_at,
+        key_summary.latest_api_key_last_used_at,
         COALESCE(reg_summary.total_requests, 0)::int AS total_requests,
         COALESCE(reg_summary.processed_requests, 0)::int AS processed_requests,
         COALESCE(domain_summary.domain_extension_count, 0)::int AS domain_extension_count,
@@ -454,6 +631,32 @@ async function getRegistrarById(registrarId) {
         COALESCE(price_summary.service_package_price_count, 0)::int AS service_package_price_count,
         COALESCE(bundle_summary.bundle_count, 0)::int AS bundle_count
       FROM registrars r
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*)::int AS api_key_count,
+          COUNT(*) FILTER (
+            WHERE rak.status = 'active'
+              AND (rak.expires_at IS NULL OR rak.expires_at > CURRENT_TIMESTAMP)
+          )::int AS active_api_key_count,
+          (ARRAY_AGG(rak.key_prefix ORDER BY rak.created_at DESC, rak.id DESC))[1] AS latest_api_key_prefix,
+          (
+            ARRAY_AGG(
+              CASE
+                WHEN rak.status = 'active'
+                  AND rak.expires_at IS NOT NULL
+                  AND rak.expires_at <= CURRENT_TIMESTAMP
+                THEN 'expired'
+                ELSE rak.status
+              END
+              ORDER BY rak.created_at DESC, rak.id DESC
+            )
+          )[1] AS latest_api_key_status,
+          (ARRAY_AGG(rak.expires_at ORDER BY rak.created_at DESC, rak.id DESC))[1] AS latest_api_key_expires_at,
+          (ARRAY_AGG(rak.created_at ORDER BY rak.created_at DESC, rak.id DESC))[1] AS latest_api_key_created_at,
+          (ARRAY_AGG(rak.last_used_at ORDER BY rak.created_at DESC, rak.id DESC))[1] AS latest_api_key_last_used_at
+        FROM domain_updater.registrar_api_keys rak
+        WHERE rak.registrar_id = r.id
+      ) key_summary ON TRUE
       LEFT JOIN LATERAL (
         SELECT
           COUNT(reg.request_id)::int AS total_requests,
@@ -503,6 +706,39 @@ async function getRegistrarById(registrarId) {
   );
 
   return result.rows[0] || null;
+}
+
+async function insertRegistrarPortalApiKey(client, registrar, options = {}) {
+  return createPrimaryRegistrarApiKey(client, registrar, {
+    actorId: normalizeNullableString(options.actorId) || 'admin',
+    actorType: normalizeNullableString(options.actorType) || 'checkout_admin_tui',
+    keyLabel: normalizeNullableString(options.keyLabel) || 'Primary Portal Key',
+    revokeExisting: options.revokeExisting !== false,
+    rotationReason:
+      normalizeNullableString(options.rotationReason) || 'admin_rotation',
+  });
+}
+
+async function createRegistrarPortalApiKey(registrarId, options = {}) {
+  const registrar = await getRegistrarById(registrarId);
+
+  if (!registrar) {
+    throw new Error('Registrar not found.');
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    const portalKey = await insertRegistrarPortalApiKey(client, registrar, options);
+    await client.query('COMMIT');
+    return portalKey;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function listDomainExtensions() {
@@ -736,24 +972,76 @@ async function createRegistrar(payload) {
       `
         INSERT INTO registrars (
           name,
+          primary_email,
+          primary_phone,
           api_endpoint,
           notification_email,
-          is_active
+          is_active,
+          updated_by_actor_type,
+          updated_by_actor_id
         )
-        VALUES ($1, $2, $3, $4)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING id
       `,
       [
         input.name,
+        input.primaryEmail,
+        input.primaryPhone,
         input.apiEndpoint,
-        input.notificationEmail,
+        input.notificationEmail || input.primaryEmail,
         input.isActive,
+        'admin_tui',
+        null,
       ]
     );
 
+    const registrarResult = await client.query(
+      `
+        SELECT
+          id,
+          registrar_code,
+          name,
+          primary_email,
+          primary_phone,
+          notification_email,
+          api_endpoint,
+          is_active
+        FROM registrars
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [result.rows[0].id]
+    );
+
+    const createdRegistrar = registrarResult.rows[0];
+
+    if (!createdRegistrar) {
+      throw new Error('Registrar could not be loaded after creation.');
+    }
+
+    const portalKey = await insertRegistrarPortalApiKey(client, createdRegistrar, {
+      actorId: 'admin',
+      actorType: 'checkout_admin_tui',
+      keyLabel: 'Primary Portal Key',
+      rotationReason: 'initial_onboarding',
+    });
+
     await client.query('COMMIT');
 
-    return getRegistrarById(result.rows[0].id);
+    const registrar = await getRegistrarById(result.rows[0].id);
+    const onboardingEmail = await sendRegistrarOnboardingEmail({
+      apiKey: portalKey.apiKey,
+      expiresAt: portalKey.expiresAt,
+      registrar: createdRegistrar,
+    });
+
+    return {
+      onboarding: {
+        ...portalKey,
+        emailDelivery: onboardingEmail,
+      },
+      registrar,
+    };
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -792,17 +1080,26 @@ async function updateRegistrar(registrarId, payload) {
       `
         UPDATE registrars
         SET name = $2,
-            api_endpoint = $3,
-            notification_email = $4,
-            is_active = $5
+            primary_email = $3,
+            primary_phone = $4,
+            api_endpoint = $5,
+            notification_email = $6,
+            is_active = $7,
+            updated_at = CURRENT_TIMESTAMP,
+            updated_by_actor_type = $8,
+            updated_by_actor_id = $9
         WHERE id = $1
       `,
       [
         registrarId,
         input.name,
+        input.primaryEmail,
+        input.primaryPhone,
         input.apiEndpoint,
-        input.notificationEmail,
+        input.notificationEmail || input.primaryEmail,
         input.isActive,
+        'admin_tui',
+        null,
       ]
     );
 
@@ -849,7 +1146,10 @@ async function toggleRegistrarActive(registrarId) {
   const result = await pool.query(
     `
       UPDATE registrars
-      SET is_active = NOT is_active
+      SET is_active = NOT is_active,
+          updated_at = CURRENT_TIMESTAMP,
+          updated_by_actor_type = 'admin_tui',
+          updated_by_actor_id = NULL
       WHERE id = $1
       RETURNING id
     `,
@@ -2061,6 +2361,7 @@ async function retryAllFailedPushes() {
 
 module.exports = {
   createRegistrar,
+  createRegistrarPortalApiKey,
   deleteRegistrarServicePackage,
   deleteRegistrarServicePackagePrice,
   getDashboardData,

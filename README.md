@@ -59,8 +59,8 @@ Current reference schema for the project.
 `migrations/`
 App-owned SQL migrations for upgrading the database safely over time.
 
-`migrations/010_refresh_sample_registrar_catalog_data.sql`
-Refreshes the sample registrar catalog with realistic domain pricing and package-based offerings for the demo registrars.
+`migrations/015_remove_sample_registrar_catalog_data.sql`
+Removes the legacy demo registrars and their seeded catalog records so testing can start from clean registrar onboarding.
 
 `.env`
 Environment variables for database, SMS, and email configuration.

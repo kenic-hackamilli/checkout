@@ -7,6 +7,10 @@
     "dev": "node server.js",
     "start": "node server.js",
     "admin": "node admin/index.js",
+    "domain-updater": "node domainUpdater/server.js",
+    "domain-updater:key:first": "node domainUpdater/scripts/createApiKey.js --first-active",
+    "domain-updater:key:create": "node domainUpdater/scripts/createApiKey.js",
+    "domain-updater:key:show": "node domainUpdater/scripts/showRegistrarApiKeys.js",
     "migrate": "node scripts/migrate.js",
     "retry:registrar-pushes": "node scripts/retryRegistrarPushes.js",
     "test": "echo \"Error: no test specified\" && exit 1"

@@ -13,6 +13,21 @@ const PUBLIC_REFERENCE_LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 const PUBLIC_REFERENCE_CHARSET = `${PUBLIC_REFERENCE_LETTERS}${PUBLIC_REFERENCE_DIGITS}`;
 const PUBLIC_REFERENCE_LENGTH = 10;
 
+const PRODUCT_FAMILY_ALIASES = {
+  domain: 'domain_registration',
+  domains: 'domain_registration',
+  email: 'emails',
+  emails: 'emails',
+  mail: 'emails',
+  security: 'security',
+  server: 'servers',
+  servers: 'servers',
+  ssl: 'security',
+  tls: 'security',
+  vps: 'servers',
+  wordpress: 'hosting',
+};
+
 function getBillingCycleFromMonths(billingPeriodMonths) {
   const normalizedBillingPeriodMonths = Number(billingPeriodMonths);
 
@@ -55,6 +70,15 @@ function getBillingLabel({ billingCycle, billingPeriodMonths, billingLabel }) {
   return 'Flexible';
 }
 
+function normalizeProductFamilyValue(value) {
+  const normalized =
+    typeof value === 'string'
+      ? value.trim().toLowerCase().replace(/[\s-]+/g, '_')
+      : '';
+
+  return PRODUCT_FAMILY_ALIASES[normalized] || normalized;
+}
+
 function getProductFamilyFromServiceCode(serviceCode) {
   const normalizedServiceCode =
     typeof serviceCode === 'string' ? serviceCode.trim().toLowerCase() : '';
@@ -72,14 +96,14 @@ function getProductFamilyFromServiceCode(serviceCode) {
   }
 
   if (normalizedServiceCode === 'wordpress_hosting') {
-    return 'wordpress';
+    return 'hosting';
   }
 
   if (normalizedServiceCode === 'ssl') {
     return 'security';
   }
 
-  return normalizedServiceCode || '';
+  return normalizeProductFamilyValue(normalizedServiceCode) || '';
 }
 
 function normalizeJsonObject(value) {
@@ -121,7 +145,7 @@ function titleCase(value) {
 }
 
 function getProductFamilyCopy(productFamily) {
-  const family = normalizeTextValue(productFamily).toLowerCase();
+  const family = normalizeProductFamilyValue(productFamily);
 
   switch (family) {
     case 'domain_registration':
@@ -147,12 +171,6 @@ function getProductFamilyCopy(productFamily) {
         descriptorKeywords: ['vps', 'server', 'cloud'],
         offeringLabel: 'VPS plan',
         productLabel: 'VPS',
-      };
-    case 'wordpress':
-      return {
-        descriptorKeywords: ['wordpress'],
-        offeringLabel: 'WordPress hosting plan',
-        productLabel: 'WordPress Hosting',
       };
     case 'security':
       return {
@@ -187,9 +205,11 @@ function getRegistrationSnapshot(registration) {
 
 function getNormalizedProductFamily(registration) {
   const snapshot = getRegistrationSnapshot(registration);
-  const snapshotProductFamily = normalizeTextValue(snapshot.product_family);
-  const registrationProductFamily = normalizeTextValue(registration.product_family);
-  const targetService = normalizeTextValue(registration.target_service);
+  const snapshotProductFamily = normalizeProductFamilyValue(snapshot.product_family);
+  const registrationProductFamily = normalizeProductFamilyValue(
+    registration.product_family
+  );
+  const targetService = normalizeProductFamilyValue(registration.target_service);
   const serviceProductCode =
     normalizeTextValue(registration.service_product_code) ||
     normalizeTextValue(snapshot.service_product_code);
@@ -833,6 +853,7 @@ async function resolveServiceSelection({
         rspp.currency_code,
         rspp.is_default,
         sp.service_code,
+        sp.product_family,
         sp.name AS service_name,
         r.registrar_code,
         r.name AS registrar_name
@@ -857,8 +878,11 @@ async function resolveServiceSelection({
   }
 
   const normalizedTargetService =
-    normalizeTextValue(targetService) || normalizeTextValue(row.service_code);
+    normalizeProductFamilyValue(targetService) ||
+    normalizeProductFamilyValue(row.product_family) ||
+    normalizeTextValue(row.service_code);
   const productFamily =
+    normalizeProductFamilyValue(row.product_family) ||
     getProductFamilyFromServiceCode(normalizedTargetService) ||
     getProductFamilyFromServiceCode(row.service_code);
   const packagePriceKsh = Number.isFinite(Number(row.price_ksh))
@@ -1003,12 +1027,16 @@ function buildFallbackSelection({
   service_product_code,
   target_service,
 }) {
+  const normalizedTargetService = normalizeProductFamilyValue(target_service);
   const normalizedSelectionKind =
     selection_kind ||
-    (target_service === 'domain_registration' || target_service === 'domain_registration_only'
+    (normalizedTargetService === 'domain_registration' ||
+    normalizedTargetService === 'domain_registration_only'
       ? 'domain'
       : '');
-  const normalizedProductFamily = product_family || target_service || null;
+  const normalizedProductFamily = normalizeProductFamilyValue(
+    product_family || normalizedTargetService || null
+  );
 
   return {
     billing_cycle,
@@ -1036,7 +1064,7 @@ function buildFallbackSelection({
     },
     service_product_code,
     target_service:
-      target_service ||
+      normalizedTargetService ||
       normalizedProductFamily ||
       (normalizedSelectionKind === 'domain' ? 'domain_registration_only' : null),
   };

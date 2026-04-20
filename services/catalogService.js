@@ -20,17 +20,41 @@ const SERVICE_PRODUCT_FAMILY_CONFIG = {
   },
   vps_hosting: {
     productFamily: 'servers',
-    productFamilyLabel: 'VPS',
+    productFamilyLabel: 'Servers',
   },
   wordpress_hosting: {
-    productFamily: 'wordpress',
-    productFamilyLabel: 'WordPress Hosting',
+    productFamily: 'hosting',
+    productFamilyLabel: 'Hosting',
   },
   ssl: {
     productFamily: 'security',
     productFamilyLabel: 'SSL Certificates',
   },
 };
+
+const PRODUCT_FAMILY_ALIASES = {
+  domain: 'domain_registration',
+  domains: 'domain_registration',
+  email: 'emails',
+  emails: 'emails',
+  hosting: 'hosting',
+  security: 'security',
+  server: 'servers',
+  servers: 'servers',
+  ssl: 'security',
+  tls: 'security',
+  vps: 'servers',
+  wordpress: 'hosting',
+};
+
+function normalizeProductFamily(value) {
+  const normalized =
+    typeof value === 'string'
+      ? value.trim().toLowerCase().replace(/[\s-]+/g, '_')
+      : '';
+
+  return PRODUCT_FAMILY_ALIASES[normalized] || normalized;
+}
 
 function getBillingCycle({ billingCycle, billingPeriodMonths }) {
   const normalizedBillingCycle =
@@ -124,7 +148,23 @@ function normalizeTextArray(value) {
     .filter(Boolean);
 }
 
-function getProductFamilyInfo(serviceCode, serviceCategory) {
+function getProductFamilyInfo(serviceCode, serviceCategory, productFamily) {
+  const normalizedProductFamily = normalizeProductFamily(productFamily);
+
+  if (normalizedProductFamily === DOMAIN_PRODUCT_FAMILY.product_family) {
+    return {
+      productFamily: DOMAIN_PRODUCT_FAMILY.product_family,
+      productFamilyLabel: DOMAIN_PRODUCT_FAMILY.product_family_label,
+    };
+  }
+
+  if (normalizedProductFamily) {
+    return {
+      productFamily: normalizedProductFamily,
+      productFamilyLabel: getProductFamilyLabelFromId(normalizedProductFamily),
+    };
+  }
+
   const normalizedServiceCode =
     typeof serviceCode === 'string' ? serviceCode.trim().toLowerCase() : '';
 
@@ -132,8 +172,14 @@ function getProductFamilyInfo(serviceCode, serviceCategory) {
     return SERVICE_PRODUCT_FAMILY_CONFIG[normalizedServiceCode];
   }
 
-  const normalizedCategory =
-    typeof serviceCategory === 'string' ? serviceCategory.trim().toLowerCase() : '';
+  const normalizedCategory = normalizeProductFamily(serviceCategory);
+
+  if (normalizedCategory === 'emails') {
+    return {
+      productFamily: 'emails',
+      productFamilyLabel: 'Emails',
+    };
+  }
 
   if (normalizedCategory === 'hosting') {
     return {
@@ -142,10 +188,17 @@ function getProductFamilyInfo(serviceCode, serviceCategory) {
     };
   }
 
-  if (normalizedCategory === 'email') {
+  if (normalizedCategory === 'servers') {
     return {
-      productFamily: 'emails',
-      productFamilyLabel: 'Emails',
+      productFamily: 'servers',
+      productFamilyLabel: 'Servers',
+    };
+  }
+
+  if (normalizedCategory === 'security') {
+    return {
+      productFamily: 'security',
+      productFamilyLabel: 'SSL Certificates',
     };
   }
 
@@ -157,21 +210,15 @@ function getProductFamilyInfo(serviceCode, serviceCategory) {
   };
 }
 
-function getServiceCodesForProductFamily(productFamily) {
-  const normalizedProductFamily =
-    typeof productFamily === 'string' ? productFamily.trim().toLowerCase() : '';
-
-  return Object.entries(SERVICE_PRODUCT_FAMILY_CONFIG)
-    .filter(([, value]) => value.productFamily === normalizedProductFamily)
-    .map(([serviceCode]) => serviceCode);
-}
-
 function getProductFamilyLabelFromId(productFamily) {
-  const normalizedProductFamily =
-    typeof productFamily === 'string' ? productFamily.trim().toLowerCase() : '';
+  const normalizedProductFamily = normalizeProductFamily(productFamily);
 
   if (normalizedProductFamily === DOMAIN_PRODUCT_FAMILY.product_family) {
     return DOMAIN_PRODUCT_FAMILY.product_family_label;
+  }
+
+  if (normalizedProductFamily === 'servers') {
+    return 'Servers';
   }
 
   const matchedEntry = Object.values(SERVICE_PRODUCT_FAMILY_CONFIG).find(
@@ -346,7 +393,8 @@ function groupServicePackages(rows) {
   for (const row of rows) {
     const { productFamily, productFamilyLabel } = getProductFamilyInfo(
       row.service_code,
-      row.service_category
+      row.service_category,
+      row.product_family
     );
     const existingPackage = packageMap.get(row.service_package_id) || {
       feature_bullets: normalizeTextArray(row.feature_bullets_json),
@@ -686,6 +734,7 @@ async function getServiceOfferingsByRegistrarIds(registrarIds) {
         rso.currency_code,
         rso.features_json,
         sp.service_code,
+        sp.product_family,
         sp.name AS service_name,
         sp.service_category
       FROM registrar_service_offerings rso
@@ -705,7 +754,12 @@ async function getServiceOfferingsByRegistrarIds(registrarIds) {
   return result.rows;
 }
 
-async function getServicePackagePriceRows({ registrarIds, registrarId, serviceCodes }) {
+async function getServicePackagePriceRows({
+  registrarIds,
+  registrarId,
+  productFamily,
+  serviceCodes,
+}) {
   const params = [];
   const filters = [
     'r.is_active = true',
@@ -727,6 +781,11 @@ async function getServicePackagePriceRows({ registrarIds, registrarId, serviceCo
   if (serviceCodes && serviceCodes.length) {
     params.push(serviceCodes);
     filters.push(`sp.service_code = ANY($${params.length}::text[])`);
+  }
+
+  if (productFamily) {
+    params.push(normalizeProductFamily(productFamily));
+    filters.push(`sp.product_family = $${params.length}`);
   }
 
   const result = await pool.query(
@@ -751,6 +810,7 @@ async function getServicePackagePriceRows({ registrarIds, registrarId, serviceCo
         rspp.currency_code,
         rspp.is_default,
         sp.service_code,
+        sp.product_family,
         sp.name AS service_name,
         sp.service_category
       FROM registrar_service_packages rsp
@@ -962,15 +1022,19 @@ async function getRegistrarServicePackagesByFamily({ productFamily, registrarCod
     return null;
   }
 
-  const serviceCodes = getServiceCodesForProductFamily(productFamily);
+  const normalizedProductFamily = normalizeProductFamily(productFamily);
 
-  if (!serviceCodes.length) {
+  if (
+    !normalizedProductFamily ||
+    normalizedProductFamily === DOMAIN_PRODUCT_FAMILY.product_family ||
+    normalizedProductFamily === 'bundle'
+  ) {
     throw new Error('Unsupported product family.');
   }
 
   const rows = await getServicePackagePriceRows({
     registrarId: registrar.registrar_id,
-    serviceCodes,
+    productFamily: normalizedProductFamily,
   });
 
   const packages = groupServicePackages(rows);
@@ -981,8 +1045,8 @@ async function getRegistrarServicePackagesByFamily({ productFamily, registrarCod
           product_family_label: packages[0].product_family_label,
         }
       : {
-          product_family: productFamily,
-          product_family_label: getProductFamilyLabelFromId(productFamily),
+          product_family: normalizedProductFamily,
+          product_family_label: getProductFamilyLabelFromId(normalizedProductFamily),
         };
 
   return {

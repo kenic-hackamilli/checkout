@@ -21,6 +21,18 @@ const REGISTRAR_FORM_FIELDS = [
     type: 'text',
   },
   {
+    description: 'Primary registrar contact email used for portal access and operational communication.',
+    key: 'primaryEmail',
+    label: 'Primary Email',
+    type: 'text',
+  },
+  {
+    description: 'Primary registrar contact phone used for portal OTP verification.',
+    key: 'primaryPhone',
+    label: 'Primary Phone',
+    type: 'text',
+  },
+  {
     description: 'Optional registrar API endpoint used for automated push requests.',
     key: 'apiEndpoint',
     label: 'API Endpoint',
@@ -284,6 +296,8 @@ function createRegistrarDraft(existingRegistrar = null) {
     apiEndpoint: existingRegistrar ? existingRegistrar.api_endpoint || '' : '',
     isActive: existingRegistrar ? Boolean(existingRegistrar.is_active) : true,
     name: existingRegistrar ? existingRegistrar.name || '' : '',
+    primaryEmail: existingRegistrar ? existingRegistrar.primary_email || '' : '',
+    primaryPhone: existingRegistrar ? existingRegistrar.primary_phone || '' : '',
     notificationEmail: existingRegistrar
       ? existingRegistrar.notification_email || ''
       : '',
@@ -391,6 +405,7 @@ class AdminApp {
       lastUpdated: null,
       logs: [],
       registrars: [],
+      visiblePortalKeys: {},
       status: {
         message: 'Admin UI ready. Press Ctrl+R to refresh the current view.',
         type: 'info',
@@ -632,6 +647,11 @@ class AdminApp {
           return;
         }
 
+        if (ch === 'k') {
+          await this.createPortalKeyForSelectedRegistrar();
+          return;
+        }
+
         if (ch === 'o') {
           await this.openDomainOfferManager();
           return;
@@ -683,6 +703,27 @@ class AdminApp {
     this.updateStatusBar();
   }
 
+  rememberVisiblePortalKey(keyResult) {
+    if (!keyResult || !keyResult.registrar || !keyResult.registrar.id || !keyResult.apiKey) {
+      return;
+    }
+
+    this.state.visiblePortalKeys[keyResult.registrar.id] = {
+      apiKey: keyResult.apiKey,
+      createdAt: keyResult.createdAt || null,
+      expiresAt: keyResult.expiresAt || null,
+      keyPrefix: keyResult.keyPrefix || null,
+    };
+  }
+
+  getVisiblePortalKey(registrarId) {
+    if (!registrarId) {
+      return null;
+    }
+
+    return this.state.visiblePortalKeys[registrarId] || null;
+  }
+
   updateChrome() {
     this.header.setContent(
       ` Checkout API Admin\n ${VIEW_LABELS[this.state.view]} | Last updated: ${formatDateTime(this.state.lastUpdated)}`
@@ -698,7 +739,7 @@ class AdminApp {
       dashboard: `${common} | s search reference`,
       failed: `${common} | r retry selected | R retry all`,
       logs: `${common} | arrows move`,
-      registrars: `${common} | a add | e edit | o domain offers | p packages | t toggle active`,
+      registrars: `${common} | a add | e edit | k rotate portal key | o domain offers | p packages | t toggle active`,
     };
 
     this.helpBar.setContent(` ${viewHelp[this.state.view]}`);
@@ -892,7 +933,7 @@ class AdminApp {
     const registrarLines = activeRegistrars.length
       ? activeRegistrars.slice(0, 10).map(
           (registrar) =>
-            `${truncate(`${registrar.registrar_code} ${registrar.name}`, 30)}  requests:${registrar.total_requests}  processed:${registrar.processed_requests}\nemail:${toDisplay(registrar.notification_email)}`
+            `${truncate(`${registrar.registrar_code} ${registrar.name}`, 30)}  requests:${registrar.total_requests}  processed:${registrar.processed_requests}\nemail:${toDisplay(registrar.primary_email || registrar.notification_email)}`
         )
       : ['No active registrars configured yet.'];
 
@@ -928,7 +969,7 @@ class AdminApp {
       left: 1,
       right: 1,
       height: 1,
-      content: `${pad('Code', 8)} ${pad('Name', 18)} ${pad('Status', 10)} ${pad('Email', 20)} ${pad('API', 10)} ${pad('Req', 6)}`,
+      content: `${pad('Code', 8)} ${pad('Name', 16)} ${pad('Status', 10)} ${pad('Email', 20)} ${pad('Phone', 14)} ${pad('Req', 6)}`,
       style: {
         bold: true,
         fg: 'white',
@@ -962,7 +1003,7 @@ class AdminApp {
       items: registrars.length
         ? registrars.map(
             (registrar) =>
-              `${pad(registrar.registrar_code || '—', 8)} ${pad(registrar.name, 18)} ${pad(registrar.is_active ? 'ACTIVE' : 'INACTIVE', 10)} ${pad(registrar.notification_email || '—', 20)} ${pad(registrar.api_endpoint ? 'CONFIGURED' : '—', 10)} ${pad(registrar.total_requests, 6)}`
+              `${pad(registrar.registrar_code || '—', 8)} ${pad(registrar.name, 16)} ${pad(registrar.is_active ? 'ACTIVE' : 'INACTIVE', 10)} ${pad(registrar.primary_email || registrar.notification_email || '—', 20)} ${pad(registrar.primary_phone || '—', 14)} ${pad(registrar.total_requests, 6)}`
           )
         : ['No registrars found. Press "a" to add one.'],
     });
@@ -977,6 +1018,7 @@ class AdminApp {
       }
 
       const registrar = registrars[index];
+      const visiblePortalKey = this.getVisiblePortalKey(registrar.id);
 
       detailsPanel.setContent(
         [
@@ -984,8 +1026,25 @@ class AdminApp {
           ` Code: ${toDisplay(registrar.registrar_code)}`,
           ` Name: ${registrar.name}`,
           ` Active: ${formatBoolean(registrar.is_active)}`,
+          ` Primary Email: ${toDisplay(registrar.primary_email)}`,
+          ` Primary Phone: ${toDisplay(registrar.primary_phone)}`,
           ` Notification Email: ${toDisplay(registrar.notification_email)}`,
           ` API Endpoint: ${toDisplay(registrar.api_endpoint)}`,
+          ` Portal Keys: ${toDisplay(registrar.active_api_key_count)}/${toDisplay(registrar.api_key_count)} active`,
+          ` Latest Key Prefix: ${toDisplay(registrar.latest_api_key_prefix)}`,
+          ` Latest Key Status: ${toDisplay(registrar.latest_api_key_status)}`,
+          ` Latest Key Expires: ${formatDateTime(registrar.latest_api_key_expires_at)}`,
+          ` Latest Key Created: ${formatDateTime(registrar.latest_api_key_created_at)}`,
+          ` Latest Key Last Used: ${formatDateTime(registrar.latest_api_key_last_used_at)}`,
+          ` API Key Secret: ${toDisplay(
+            visiblePortalKey ? visiblePortalKey.apiKey : null
+          )}`,
+          ` Key Storage: ${registrar.latest_api_key_prefix ? 'Stored hashed for verification.' : 'No key issued yet.'}`,
+          ` Key Secret Scope: ${
+            visiblePortalKey
+              ? 'Visible in this admin session after generation/rotation.'
+              : 'Raw secret is not recoverable after generation.'
+          }`,
           ` Total Requests: ${registrar.total_requests}`,
           ` Processed Requests: ${registrar.processed_requests}`,
           ` Domain Offers: ${registrar.domain_extension_count}`,
@@ -993,10 +1052,12 @@ class AdminApp {
           ` Package Prices: ${toDisplay(registrar.service_package_price_count)}`,
           ` Bundles: ${registrar.bundle_count}`,
           ` Created At: ${formatDateTime(registrar.created_at)}`,
+          ` Updated At: ${formatDateTime(registrar.updated_at)}`,
           '',
           ' Actions:',
           '  a  Add registrar',
           '  e  Open registrar editor',
+          '  k  Rotate the primary portal API key',
           '  o  Manage domain offers and pricing',
           '  p  Manage packages and pricing',
           '  t  Toggle active / inactive',
@@ -1015,6 +1076,9 @@ class AdminApp {
     });
     list.key(['e'], async () => {
       await this.editSelectedRegistrar();
+    });
+    list.key(['k'], async () => {
+      await this.createPortalKeyForSelectedRegistrar();
     });
     list.key(['o'], async () => {
       await this.openDomainOfferManager();
@@ -2220,6 +2284,8 @@ class AdminApp {
               '',
               ' Draft Preview:',
               `  Name: ${draft.name || 'Not set'}`,
+              `  Primary Email: ${draft.primaryEmail || 'Not set'}`,
+              `  Primary Phone: ${draft.primaryPhone || 'Not set'}`,
               `  API Endpoint: ${draft.apiEndpoint || 'Not set'}`,
               `  Notification Email: ${draft.notificationEmail || 'Not set'}`,
               `  Active: ${draft.isActive ? 'Active' : 'Inactive'}`,
@@ -2288,26 +2354,72 @@ class AdminApp {
         apiEndpoint: result.apiEndpoint,
         isActive: result.isActive,
         name: result.name,
+        primaryEmail: result.primaryEmail,
+        primaryPhone: result.primaryPhone,
         notificationEmail: result.notificationEmail,
       };
 
-      await this.withLoading(
+      const creationResult = await this.withLoading(
         existingRegistrar ? 'Updating registrar...' : 'Creating registrar...',
         async () => {
+          let onboarding = null;
+          let emailDelivery = null;
+
           if (existingRegistrar) {
             await adminService.updateRegistrar(existingRegistrar.id, payload);
             this.setStatus(`Registrar "${payload.name}" updated successfully.`, 'success');
+            return null;
           } else {
-            await adminService.createRegistrar(payload);
-            this.setStatus(`Registrar "${payload.name}" created successfully.`, 'success');
+            const created = await adminService.createRegistrar(payload);
+            onboarding = created && created.onboarding ? created.onboarding : null;
+            emailDelivery = onboarding ? onboarding.emailDelivery : null;
+            let statusMessage = `Registrar "${payload.name}" created successfully.`;
+
+            if (emailDelivery && emailDelivery.status === 'sent') {
+              statusMessage += ` Onboarding email sent to ${emailDelivery.destination}.`;
+            } else if (emailDelivery && emailDelivery.status === 'failed') {
+              statusMessage += ` Onboarding email failed: ${emailDelivery.reason}.`;
+            } else if (emailDelivery && emailDelivery.status === 'skipped') {
+              statusMessage += ' Onboarding email was skipped.';
+            }
+
+            this.setStatus(
+              statusMessage,
+              emailDelivery && emailDelivery.status === 'failed' ? 'warning' : 'success'
+            );
           }
 
           this.state.view = 'registrars';
           this.updateChrome();
           this.state.registrars = await adminService.listRegistrars();
           this.renderView();
+
+          return existingRegistrar
+            ? null
+            : {
+                onboarding: onboarding
+                  ? {
+                      ...onboarding,
+                      note:
+                        emailDelivery && emailDelivery.status === 'sent'
+                          ? `Onboarding email sent to ${emailDelivery.destination}.`
+                          : emailDelivery && emailDelivery.status === 'failed'
+                          ? `Onboarding email failed: ${emailDelivery.reason}`
+                          : emailDelivery && emailDelivery.status === 'skipped'
+                          ? 'Onboarding email skipped. Share this key securely.'
+                          : null,
+                    }
+                  : null,
+              };
         }
       );
+
+      if (creationResult && creationResult.onboarding && creationResult.onboarding.apiKey) {
+        this.rememberVisiblePortalKey(creationResult.onboarding);
+        this.renderView();
+        this.screen.render();
+        await this.showPortalKeyModal(creationResult.onboarding);
+      }
     } catch (error) {
       this.setStatus(error.message, 'error');
     } finally {
@@ -3686,6 +3798,139 @@ class AdminApp {
     }
 
     await this.openRegistrarForm(registrar);
+  }
+
+  async showPortalKeyModal(keyResult) {
+    this.modalActive = true;
+
+    return new Promise((resolve) => {
+      const infoLines = [
+        `Registrar: ${keyResult.registrar.name} (${keyResult.registrar.registrarCode})`,
+        `Label: ${keyResult.keyLabel}`,
+        `Prefix: ${keyResult.keyPrefix}`,
+        `Expires: ${formatDateTime(keyResult.expiresAt)}`,
+        'Store this full key now. It will not be shown again after you close this dialog.',
+      ];
+
+      if (keyResult.note) {
+        infoLines.push(keyResult.note);
+      }
+
+      if (keyResult.rotatedCount) {
+        infoLines.push(`Previous active keys revoked: ${keyResult.rotatedCount}`);
+      }
+
+      const modal = blessed.box({
+        parent: this.screen,
+        top: 'center',
+        left: 'center',
+        width: '72%',
+        height: keyResult.note ? 17 : 15,
+        border: 'line',
+        label: ' Primary Portal API Key ',
+        keys: true,
+        mouse: true,
+        style: {
+          bg: 'black',
+          fg: 'white',
+          border: {
+            fg: 'green',
+          },
+        },
+      });
+
+      blessed.box({
+        parent: modal,
+        top: 1,
+        left: 2,
+        right: 2,
+        height: infoLines.length + 1,
+        content: infoLines.join('\n'),
+        style: {
+          fg: 'white',
+        },
+      });
+
+      blessed.box({
+        parent: modal,
+        top: keyResult.note ? 8 : 6,
+        left: 2,
+        right: 2,
+        height: 3,
+        padding: {
+          left: 1,
+          right: 1,
+        },
+        border: 'line',
+        content: keyResult.apiKey,
+        style: {
+          fg: 'black',
+          bg: 'green',
+          border: {
+            fg: 'green',
+          },
+        },
+      });
+
+      blessed.box({
+        parent: modal,
+        bottom: 1,
+        left: 2,
+        right: 2,
+        height: 2,
+        align: 'center',
+        content: 'Press Enter, Escape, or x to close this key view.',
+        style: {
+          fg: 'yellow',
+        },
+      });
+
+      const close = () => {
+        modal.detach();
+        this.modalActive = false;
+        this.screen.render();
+        resolve();
+      };
+
+      modal.key(['enter', 'escape', 'x'], () => close());
+      modal.focus();
+      this.screen.render();
+    });
+  }
+
+  async createPortalKeyForSelectedRegistrar() {
+    const registrar = this.getSelectedRegistrar();
+
+    if (!registrar) {
+      this.setStatus('Select a registrar first.', 'warning');
+      return;
+    }
+
+      const confirmed = await this.askConfirmation(
+      `Rotate the primary portal API key for "${registrar.name}"?`
+    );
+
+    if (!confirmed) {
+      this.setStatus('Portal key rotation cancelled.', 'warning');
+      return;
+    }
+
+    const keyResult = await this.withLoading('Rotating primary portal API key...', async () => {
+      const createdKey = await adminService.createRegistrarPortalApiKey(registrar.id);
+      await this.refreshRegistrarsState();
+      this.renderView();
+      return createdKey;
+    });
+
+    if (!keyResult) {
+      return;
+    }
+
+    this.rememberVisiblePortalKey(keyResult);
+    this.renderView();
+    this.screen.render();
+    await this.showPortalKeyModal(keyResult);
+    this.setStatus(`Rotated the primary portal API key for "${registrar.name}".`, 'success');
   }
 
   async toggleSelectedRegistrar() {
