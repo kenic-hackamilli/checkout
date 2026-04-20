@@ -10,6 +10,8 @@ const {
   normalizeExternalRequestId,
 } = require('../utils/validation');
 
+const LIVE_REGISTRAR_CONSOLE_URL = 'https://apps.kenic.or.ke/console/';
+
 function normalizeString(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -65,37 +67,47 @@ function getBillingCycleFromMonths(billingPeriodMonths) {
   return 'custom';
 }
 
+function isLocalAccessUrl(value) {
+  try {
+    const parsedUrl = new URL(String(value || '').trim());
+    return ['localhost', '127.0.0.1', '0.0.0.0'].includes(parsedUrl.hostname);
+  } catch (_error) {
+    return false;
+  }
+}
+
 function buildPortalAccessUrl() {
   const normalizedUrl = normalizeNullableString(domainUpdaterEnv.publicUrl);
 
-  if (!normalizedUrl) {
-    return null;
+  if (!normalizedUrl || isLocalAccessUrl(normalizedUrl)) {
+    return LIVE_REGISTRAR_CONSOLE_URL;
   }
 
   return normalizedUrl.endsWith('/') ? normalizedUrl : `${normalizedUrl}/`;
 }
 
 function buildRegistrarOnboardingEmail({ expiresAt, registrar, apiKey }) {
-  const portalUrl = buildPortalAccessUrl();
+  const consoleUrl = buildPortalAccessUrl();
   const expiresLine = expiresAt
     ? `This key is scheduled to expire on ${new Date(expiresAt).toUTCString()}.`
     : 'This key remains active until an administrator rotates it.';
-  const subject = `${registrar.name} portal access is ready`;
+  const subject = `${registrar.name} console workspace is ready`;
   const textLines = [
     `Hello ${registrar.name},`,
     '',
-    'You have been successfully onboarded to DomainUpdater.',
+    'Your console workspace is ready.',
+    'You have been onboarded successfully.',
     '',
-    'Your private registrar login API key is:',
+    'Use this API key to log in to your console workspace:',
     apiKey,
     '',
     'This credential is private and confidential. Store it securely and do not share it outside your registrar team.',
     expiresLine,
-    'When you enter this key in the portal, a one-time password will be sent automatically to your registered email and/or phone number.',
+    'When you enter this key in the console workspace, a one-time password will be sent automatically to your registered email and/or phone number.',
   ];
 
-  if (portalUrl) {
-    textLines.push('', `Portal URL: ${portalUrl}`);
+  if (consoleUrl) {
+    textLines.push('', `Console workspace URL: ${consoleUrl}`);
   }
 
   textLines.push(
@@ -105,17 +117,18 @@ function buildRegistrarOnboardingEmail({ expiresAt, registrar, apiKey }) {
 
   const htmlSections = [
     `<p>Hello ${registrar.name},</p>`,
-    '<p>You have been successfully onboarded to <strong>DomainUpdater</strong>.</p>',
-    '<p>Your private registrar login API key is:</p>',
+    '<p><strong>Your console workspace is ready.</strong></p>',
+    '<p>You have been onboarded successfully.</p>',
+    '<p>Use this API key to log in to your console workspace:</p>',
     `<p style="font-size:18px;font-weight:700;letter-spacing:0.06em;padding:14px 18px;border-radius:12px;background:#eef3ff;color:#10203d;display:inline-block;">${apiKey}</p>`,
     '<p><strong>Private and confidential:</strong> store this credential securely and do not share it outside your registrar team.</p>',
     `<p>${expiresLine}</p>`,
-    '<p>When you enter this key in the portal, a one-time password will be sent automatically to your registered email and/or phone number.</p>',
+    '<p>When you enter this key in the console workspace, a one-time password will be sent automatically to your registered email and/or phone number.</p>',
   ];
 
-  if (portalUrl) {
+  if (consoleUrl) {
     htmlSections.push(
-      `<p>Portal URL: <a href="${portalUrl}">${portalUrl}</a></p>`
+      `<p>Console workspace URL: <a href="${consoleUrl}">${consoleUrl}</a></p>`
     );
   }
 
