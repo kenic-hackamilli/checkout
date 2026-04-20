@@ -2,7 +2,7 @@ const pool = require('../db');
 
 const DOMAIN_PRODUCT_FAMILY = {
   product_family: 'domain_registration',
-  product_family_label: 'Domains',
+  product_family_label: 'Domain Registration',
 };
 
 const SERVICE_PRODUCT_FAMILY_CONFIG = {
@@ -28,7 +28,7 @@ const SERVICE_PRODUCT_FAMILY_CONFIG = {
   },
   ssl: {
     productFamily: 'security',
-    productFamilyLabel: 'SSL Certificates',
+    productFamilyLabel: 'Security',
   },
 };
 
@@ -44,7 +44,6 @@ const PRODUCT_FAMILY_ALIASES = {
   ssl: 'security',
   tls: 'security',
   vps: 'servers',
-  wordpress: 'hosting',
 };
 
 function normalizeProductFamily(value) {
@@ -198,7 +197,7 @@ function getProductFamilyInfo(serviceCode, serviceCategory, productFamily) {
   if (normalizedCategory === 'security') {
     return {
       productFamily: 'security',
-      productFamilyLabel: 'SSL Certificates',
+      productFamilyLabel: 'Security',
     };
   }
 

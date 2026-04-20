@@ -43,7 +43,7 @@ Runs the API locally using `server.js`.
 Starts the same API using the normal start script.
 
 `npm run admin`
-Launches the terminal-only admin dashboard for registrar management, domain pricing, service package catalogs, billing-option pricing, stats, failed push retries, and delivery log inspection.
+Launches the terminal-only admin dashboard for registrar management, domain pricing, service package catalogs, standard package pricing, stats, failed push retries, and delivery log inspection.
 
 `npm run migrate`
 Applies any new SQL files in `migrations/` and records them in `schema_migrations`.
@@ -65,13 +65,29 @@ Removes the legacy demo registrars and their seeded catalog records so testing c
 `.env`
 Environment variables for database, SMS, and email configuration.
 
+## Catalog Model
+
+The active registrar catalog now centers on five primary families:
+
+- `domain_registration`
+- `hosting`
+- `emails`
+- `servers`
+- `security`
+
+For non-domain families, checkout reads a simpler package model:
+
+- each package belongs to one product family
+- each package has one registrar-defined service type
+- each package carries one standard active price record at a time
+
 ## Admin Catalog Workflow
 
 Inside `npm run admin`:
 
 - Open the registrar workspace with `g`
 - Press `o` to manage domain offers and extension pricing
-- Press `p` to manage service packages and package billing options
+- Press `p` to manage service packages and standard package pricing
 
 Inside the package manager:
 
@@ -81,13 +97,13 @@ Inside the package manager:
 - `v` opens billing options for the selected package
 - `t` toggles the selected package active or inactive
 
-Inside the billing-option manager:
+Inside the pricing manager:
 
-- `a` adds a billing option like monthly or yearly
-- `e` edits the selected billing option
-- `d` marks the selected billing option as the default offer
-- `D` deletes the selected billing option
-- `t` toggles the selected billing option active or inactive
+- `a` adds or replaces the standard package price
+- `e` edits the stored package price
+- `d` marks the selected pricing record as the default offer
+- `D` deletes the selected pricing record
+- `t` toggles the selected pricing record active or inactive
 
 ## Registration Lifecycle And Status Interpretation
 
@@ -127,8 +143,8 @@ The registration flow now logs the main lifecycle using clearer order-focused ch
 The normalized order log now prioritizes:
 
 - `full_name`, `email`, and `phone` from the normalized customer payload
-- `target_service` as the canonical machine-readable service code, for example `vps_hosting`
-- `package_name` as the chosen package label, for example `Cloud 2`
+- `target_service` as the canonical machine-readable product family, for example `servers`
+- `package_name` as the chosen package label, for example `Premium`
 
 Delivery summaries also include per-channel:
 

@@ -25,7 +25,6 @@ const PRODUCT_FAMILY_ALIASES = {
   ssl: 'security',
   tls: 'security',
   vps: 'servers',
-  wordpress: 'hosting',
 };
 
 function getBillingCycleFromMonths(billingPeriodMonths) {
@@ -164,19 +163,19 @@ function getProductFamilyCopy(productFamily) {
       return {
         descriptorKeywords: ['email', 'mail', 'mailbox'],
         offeringLabel: 'email service',
-        productLabel: 'Email',
+        productLabel: 'Emails',
       };
     case 'servers':
       return {
         descriptorKeywords: ['vps', 'server', 'cloud'],
-        offeringLabel: 'VPS plan',
-        productLabel: 'VPS',
+        offeringLabel: 'server plan',
+        productLabel: 'Servers',
       };
     case 'security':
       return {
-        descriptorKeywords: ['ssl', 'certificate', 'tls'],
-        offeringLabel: 'SSL certificate',
-        productLabel: 'SSL Certificates',
+        descriptorKeywords: ['security', 'ssl', 'certificate', 'tls'],
+        offeringLabel: 'security service',
+        productLabel: 'Security',
       };
     case 'bundle':
       return {
