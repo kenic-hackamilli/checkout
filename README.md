@@ -40,6 +40,12 @@ Start the registrar portal backend:
 npm run domain-updater
 ```
 
+Probe the registrar portal's OTP upstream without sending a real OTP:
+
+```bash
+npm run domain-updater:otp:check
+```
+
 ## What Each Command Does
 
 `npm run dev`
@@ -59,6 +65,9 @@ Retries registrar API pushes that previously failed and were logged in `failed_r
 
 `npm run domain-updater`
 Starts the registrar-facing `DomainUpdater` service from the same repo.
+
+`npm run domain-updater:otp:check`
+Sends a safe empty-body probe to the configured OTP upstream so you can validate routing, TLS, and reverse-proxy wiring without triggering a real OTP delivery.
 
 ## Useful Files
 
@@ -84,6 +93,7 @@ The registrar API key flow depends on one shared `DOMAIN_UPDATER_API_KEY_PEPPER`
 - Checkout uses it when issuing registrar API keys.
 - DomainUpdater uses it when looking those keys up during `POST /v1/auth/start`.
 - The startup logs for both services should show the same `apiKeyPepperFingerprint`.
+- DomainUpdater startup logs also show `otpServiceTarget`, which helps verify the deployed OTP upstream target quickly.
 - Prefer setting the real value once in the shared root `.env`, then leave `domainUpdater/.env` blank unless you intentionally need an override.
 - If you change the pepper after keys already exist, rotate and reissue those API keys because old hashes will no longer match.
 
