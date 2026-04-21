@@ -204,6 +204,7 @@ async function createPrimaryRegistrarApiKey(client, registrar, options = {}) {
     actorId,
     actorType,
     apiKeyPepperFingerprint: createShortFingerprint(env.domainUpdaterApiKeyPepper),
+    apiKeyPepperSource: env.domainUpdaterApiKeyPepperSource,
     expiresAt: insertResult.rows[0].expires_at,
     keyId: insertResult.rows[0].id,
     keyLabel,

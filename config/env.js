@@ -1,9 +1,69 @@
-require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
+const dotenv = require('dotenv');
+
+dotenv.config({ quiet: true });
+
+const DEFAULT_DOMAIN_UPDATER_API_KEY_PEPPER = 'local-domain-updater-pepper';
+const DOMAIN_UPDATER_PLACEHOLDER_SECRETS = new Set(['change-me']);
 
 function toNumber(value, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
+
+function normalizeString(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function isPlaceholderSecret(value) {
+  const normalized = normalizeString(value).toLowerCase();
+  return !normalized || DOMAIN_UPDATER_PLACEHOLDER_SECRETS.has(normalized);
+}
+
+function readEnvValue(filePath, key) {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return '';
+  }
+
+  const parsed = dotenv.parse(fs.readFileSync(filePath, 'utf8'));
+  return normalizeString(parsed[key]);
+}
+
+function resolveDomainUpdaterApiKeyPepper() {
+  const configuredValue = normalizeString(process.env.DOMAIN_UPDATER_API_KEY_PEPPER);
+
+  if (configuredValue && !isPlaceholderSecret(configuredValue)) {
+    return {
+      source: 'configured_env',
+      value: configuredValue,
+    };
+  }
+
+  const localDomainUpdaterEnvValue = readEnvValue(
+    path.resolve(__dirname, '..', 'domainUpdater', '.env'),
+    'DOMAIN_UPDATER_API_KEY_PEPPER'
+  );
+
+  if (
+    localDomainUpdaterEnvValue &&
+    !isPlaceholderSecret(localDomainUpdaterEnvValue)
+  ) {
+    return {
+      source: 'domain_updater_local_env',
+      value: localDomainUpdaterEnvValue,
+    };
+  }
+
+  return {
+    source: configuredValue
+      ? 'default_fallback_placeholder_ignored'
+      : 'default_fallback',
+    value: DEFAULT_DOMAIN_UPDATER_API_KEY_PEPPER,
+  };
+}
+
+const resolvedDomainUpdaterApiKeyPepper = resolveDomainUpdaterApiKeyPepper();
 
 module.exports.env = {
   port: toNumber(process.env.PORT, 3000),
@@ -36,8 +96,8 @@ module.exports.env = {
   // Domain updater integration
   domainUpdaterPublicUrl:
     process.env.DOMAIN_UPDATER_PUBLIC_URL || 'http://localhost:4100/',
-  domainUpdaterApiKeyPepper:
-    process.env.DOMAIN_UPDATER_API_KEY_PEPPER || 'local-domain-updater-pepper',
+  domainUpdaterApiKeyPepper: resolvedDomainUpdaterApiKeyPepper.value,
+  domainUpdaterApiKeyPepperSource: resolvedDomainUpdaterApiKeyPepper.source,
   domainUpdaterApiKeyTtlDays: toNumber(
     process.env.DOMAIN_UPDATER_API_KEY_TTL_DAYS,
     365

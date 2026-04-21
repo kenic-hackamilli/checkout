@@ -21,6 +21,7 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   writeDiagnosticLog('checkout-api', 'info', 'domain_updater.integration.ready', {
     apiKeyPepperFingerprint: createShortFingerprint(env.domainUpdaterApiKeyPepper),
+    apiKeyPepperSource: env.domainUpdaterApiKeyPepperSource,
     databaseTarget: buildDatabaseTarget({
       database: env.dbName,
       host: env.dbHost,
