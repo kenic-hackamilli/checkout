@@ -31,5 +31,15 @@ module.exports.env = {
   mailFromName: process.env.MAIL_FROM_NAME || 'Checkout API',
 
   // Retries
-  notificationMaxAttempts: toNumber(process.env.NOTIFICATION_MAX_ATTEMPTS, 3)
+  notificationMaxAttempts: toNumber(process.env.NOTIFICATION_MAX_ATTEMPTS, 3),
+
+  // Domain updater integration
+  domainUpdaterPublicUrl:
+    process.env.DOMAIN_UPDATER_PUBLIC_URL || 'http://localhost:4100/',
+  domainUpdaterApiKeyPepper:
+    process.env.DOMAIN_UPDATER_API_KEY_PEPPER || 'local-domain-updater-pepper',
+  domainUpdaterApiKeyTtlDays: toNumber(
+    process.env.DOMAIN_UPDATER_API_KEY_TTL_DAYS,
+    365
+  ),
 };

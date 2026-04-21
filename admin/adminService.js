@@ -1,10 +1,10 @@
 const pool = require('../db');
 const registrationService = require('../services/registrationService');
 const { isEmailConfigured, sendEmail } = require('../services/email');
-const { env: domainUpdaterEnv } = require('../domainUpdater/src/config/env');
+const { env } = require('../config/env');
 const {
   createPrimaryRegistrarApiKey,
-} = require('../domainUpdater/src/services/registrarApiKeyService');
+} = require('../services/domainUpdaterIntegration');
 const {
   isValidExternalRequestId,
   normalizeExternalRequestId,
@@ -77,7 +77,7 @@ function isLocalAccessUrl(value) {
 }
 
 function buildPortalAccessUrl() {
-  const normalizedUrl = normalizeNullableString(domainUpdaterEnv.publicUrl);
+  const normalizedUrl = normalizeNullableString(env.domainUpdaterPublicUrl);
 
   if (!normalizedUrl || isLocalAccessUrl(normalizedUrl)) {
     return LIVE_REGISTRAR_CONSOLE_URL;
