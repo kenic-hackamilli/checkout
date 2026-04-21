@@ -1,5 +1,9 @@
 const { createHmac, randomBytes } = require('crypto');
 const { env } = require('../config/env');
+const {
+  createShortFingerprint,
+  writeDiagnosticLog,
+} = require('../utils/diagnostics');
 
 const API_KEY_PREFIX = 'dkc-';
 const API_KEY_SECRET_CHARSET =
@@ -194,6 +198,20 @@ async function createPrimaryRegistrarApiKey(client, registrar, options = {}) {
       key_prefix: generatedKey.prefix,
       rotated_existing_key_count: rotatedCount,
     },
+  });
+
+  writeDiagnosticLog('checkout-api', 'info', 'domain_updater.api_key.issued', {
+    actorId,
+    actorType,
+    apiKeyPepperFingerprint: createShortFingerprint(env.domainUpdaterApiKeyPepper),
+    expiresAt: insertResult.rows[0].expires_at,
+    keyId: insertResult.rows[0].id,
+    keyLabel,
+    keyPrefix: generatedKey.prefix,
+    registrarCode: registrar.registrar_code || null,
+    registrarId: registrar.id,
+    registrarName: registrar.name || null,
+    rotatedExistingKeyCount: rotatedCount,
   });
 
   return {
