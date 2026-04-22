@@ -86,11 +86,8 @@ function buildPortalAccessUrl() {
   return normalizedUrl.endsWith('/') ? normalizedUrl : `${normalizedUrl}/`;
 }
 
-function buildRegistrarOnboardingEmail({ expiresAt, registrar, apiKey }) {
+function buildRegistrarOnboardingEmail({ registrar, apiKey }) {
   const consoleUrl = buildPortalAccessUrl();
-  const expiresLine = expiresAt
-    ? `This key is scheduled to expire on ${new Date(expiresAt).toUTCString()}.`
-    : 'This key remains active until an administrator rotates it.';
   const subject = `${registrar.name} console workspace is ready`;
   const textLines = [
     `Hello ${registrar.name},`,
@@ -102,7 +99,6 @@ function buildRegistrarOnboardingEmail({ expiresAt, registrar, apiKey }) {
     apiKey,
     '',
     'This credential is private and confidential. Store it securely and do not share it outside your registrar team.',
-    expiresLine,
     'When you enter this key in the console workspace, a one-time password will be sent automatically to your registered email and/or phone number.',
   ];
 
@@ -122,7 +118,6 @@ function buildRegistrarOnboardingEmail({ expiresAt, registrar, apiKey }) {
     '<p>Use this API key to log in to your console workspace:</p>',
     `<p style="font-size:18px;font-weight:700;letter-spacing:0.06em;padding:14px 18px;border-radius:12px;background:#eef3ff;color:#10203d;display:inline-block;">${apiKey}</p>`,
     '<p><strong>Private and confidential:</strong> store this credential securely and do not share it outside your registrar team.</p>',
-    `<p>${expiresLine}</p>`,
     '<p>When you enter this key in the console workspace, a one-time password will be sent automatically to your registered email and/or phone number.</p>',
   ];
 
@@ -143,7 +138,7 @@ function buildRegistrarOnboardingEmail({ expiresAt, registrar, apiKey }) {
   };
 }
 
-async function sendRegistrarOnboardingEmail({ registrar, apiKey, expiresAt }) {
+async function sendRegistrarOnboardingEmail({ registrar, apiKey }) {
   if (!registrar || !registrar.primary_email) {
     return {
       reason: 'missing_primary_email',
@@ -159,7 +154,7 @@ async function sendRegistrarOnboardingEmail({ registrar, apiKey, expiresAt }) {
     };
   }
 
-  const emailContent = buildRegistrarOnboardingEmail({ registrar, apiKey, expiresAt });
+  const emailContent = buildRegistrarOnboardingEmail({ registrar, apiKey });
 
   try {
     const delivery = await sendEmail({
@@ -1044,7 +1039,6 @@ async function createRegistrar(payload) {
     const registrar = await getRegistrarById(result.rows[0].id);
     const onboardingEmail = await sendRegistrarOnboardingEmail({
       apiKey: portalKey.apiKey,
-      expiresAt: portalKey.expiresAt,
       registrar: createdRegistrar,
     });
 

@@ -198,6 +198,31 @@ function getProductFamilyCopy(productFamily) {
   }
 }
 
+function buildServiceSelectionLabel({ serviceTypeName, packageName }) {
+  const normalizedServiceTypeName = normalizeTextValue(serviceTypeName);
+  const normalizedPackageName = normalizeTextValue(packageName);
+
+  if (normalizedServiceTypeName && normalizedPackageName) {
+    const lowerServiceTypeName = normalizedServiceTypeName.toLowerCase();
+    const lowerPackageName = normalizedPackageName.toLowerCase();
+
+    if (
+      lowerServiceTypeName === lowerPackageName ||
+      lowerPackageName.includes(lowerServiceTypeName)
+    ) {
+      return normalizedPackageName;
+    }
+
+    if (lowerServiceTypeName.includes(lowerPackageName)) {
+      return normalizedServiceTypeName;
+    }
+
+    return `${normalizedServiceTypeName} (${normalizedPackageName})`;
+  }
+
+  return normalizedServiceTypeName || normalizedPackageName || '';
+}
+
 function getRegistrationSnapshot(registration) {
   return normalizeJsonObject(registration.selection_snapshot_json);
 }
@@ -224,6 +249,23 @@ function getNormalizedProductFamily(registration) {
     : resolvedProductFamily;
 }
 
+function getSelectionDetails(registration) {
+  const snapshot = getRegistrationSnapshot(registration);
+
+  return {
+    packageName:
+      normalizeTextValue(registration.package_name) ||
+      normalizeTextValue(snapshot.package_name),
+    serviceTypeName:
+      normalizeTextValue(snapshot.service_name) ||
+      normalizeTextValue(snapshot.service_type_name) ||
+      normalizeTextValue(snapshot.summary_label),
+    snapshotSelectedOfferingLabel: normalizeTextValue(
+      snapshot.selected_offering_label
+    ),
+  };
+}
+
 function isDomainOnlySelection(registration) {
   return (
     registration.selection_kind === 'domain' ||
@@ -234,16 +276,23 @@ function isDomainOnlySelection(registration) {
 }
 
 function buildSelectedOfferingLabel(registration) {
-  const snapshot = getRegistrationSnapshot(registration);
   const productFamily = getNormalizedProductFamily(registration);
   const { descriptorKeywords, offeringLabel } = getProductFamilyCopy(productFamily);
-  const packageName =
-    normalizeTextValue(registration.package_name) ||
-    normalizeTextValue(snapshot.package_name);
-  const serviceName = normalizeTextValue(snapshot.service_name);
+  const { packageName, serviceTypeName, snapshotSelectedOfferingLabel } =
+    getSelectionDetails(registration);
+  const structuredSelectionLabel = serviceTypeName
+    ? buildServiceSelectionLabel({
+        packageName,
+        serviceTypeName,
+      })
+    : '';
 
-  if (!packageName && serviceName) {
-    return serviceName;
+  if (structuredSelectionLabel) {
+    return structuredSelectionLabel;
+  }
+
+  if (snapshotSelectedOfferingLabel) {
+    return snapshotSelectedOfferingLabel;
   }
 
   if (!packageName) {
@@ -254,7 +303,7 @@ function buildSelectedOfferingLabel(registration) {
   const keywordCandidates = [
     ...descriptorKeywords,
     offeringLabel.toLowerCase(),
-    serviceName.toLowerCase(),
+    serviceTypeName.toLowerCase(),
   ].filter(Boolean);
 
   if (keywordCandidates.some((keyword) => normalizedPackageName.includes(keyword))) {
@@ -328,22 +377,31 @@ function getSafeCustomerName(registration) {
 }
 
 function buildCustomerOrderCopy(registration) {
-  const snapshot = getRegistrationSnapshot(registration);
-  const { formattedDomain, productLabel, selectedOfferingLabel } = buildPurchaseCopy(registration);
-  const snapshotOfferingLabel = normalizeTextValue(snapshot.selected_offering_label);
-  const packageName =
-    normalizeTextValue(registration.package_name) ||
-    normalizeTextValue(snapshot.package_name);
+  const { formattedDomain, isDomainOnly, productLabel, selectedOfferingLabel } =
+    buildPurchaseCopy(registration);
+  const { packageName, serviceTypeName, snapshotSelectedOfferingLabel } =
+    getSelectionDetails(registration);
+  const resolvedSelectionLabel =
+    selectedOfferingLabel || snapshotSelectedOfferingLabel || null;
 
   return {
     customerName: getSafeCustomerName(registration),
     formattedDomain,
+    isDomainOnly,
+    packageName: packageName || null,
     planName:
-      snapshotOfferingLabel ||
-      selectedOfferingLabel ||
-      packageName ||
-      (productLabel === 'Domain Registration' ? 'Domain registration' : productLabel || 'selected plan'),
+      isDomainOnly
+        ? 'Domain registration'
+        : resolvedSelectionLabel ||
+          packageName ||
+          serviceTypeName ||
+          (productLabel === 'Domain Registration'
+            ? 'Domain registration'
+            : productLabel || 'selected plan'),
     registrarName: getSafeRegistrarName(registration),
+    productLabel,
+    selectedOfferingLabel: resolvedSelectionLabel,
+    serviceTypeName: serviceTypeName || null,
   };
 }
 
@@ -351,11 +409,14 @@ function buildShortOrderConfirmationMessage(
   registration,
   { includeGreeting = true, includeReference = false } = {}
 ) {
-  const { customerName, formattedDomain, planName, registrarName } =
+  const { customerName, formattedDomain, isDomainOnly, planName, registrarName } =
     buildCustomerOrderCopy(registration);
+  const orderDescription = isDomainOnly
+    ? `domain registration for ${formattedDomain}`
+    : `${formattedDomain} together with ${planName}`;
   const opening = includeGreeting
-    ? `Hi ${customerName}, your order for ${formattedDomain} with ${planName} has been received and is being processed.`
-    : `Your order for ${formattedDomain} with ${planName} has been received and is being processed.`;
+    ? `Hi ${customerName}, we have received your order for ${orderDescription} and it is now being processed.`
+    : `We have received your order for ${orderDescription} and it is now being processed.`;
   const referenceSuffix = includeReference
     ? ` Ref: ${getPublicRequestReference(registration)}.`
     : '';
@@ -368,10 +429,13 @@ function buildClientAcknowledgementMessage(registration) {
 }
 
 function buildActiveDomainOrderConflictMessage(existingRegistration) {
-  const { formattedDomain, planName, registrarName } =
+  const { formattedDomain, isDomainOnly, planName, registrarName } =
     buildCustomerOrderCopy(existingRegistration);
+  const orderDescription = isDomainOnly
+    ? `domain registration for ${formattedDomain}`
+    : `${formattedDomain} together with ${planName}`;
 
-  return `This domain already has an active order for ${formattedDomain} with ${planName}. Kindly await next steps from ${registrarName}. Order Reference: ${getPublicRequestReference(
+  return `This domain already has an active order for ${orderDescription}. Kindly await next steps from ${registrarName}. Order Reference: ${getPublicRequestReference(
     existingRegistration
   )}.`;
 }
@@ -405,11 +469,10 @@ function buildTargetServiceValue(registration) {
 
 function buildOrderLogContext(registration) {
   const snapshot = getRegistrationSnapshot(registration);
-  const { formattedDomain, registrarName } = buildCustomerOrderCopy(registration);
-  const packageName =
-    normalizeTextValue(registration.package_name) ||
-    normalizeTextValue(snapshot.package_name) ||
-    null;
+  const { formattedDomain, registrarName, selectedOfferingLabel } =
+    buildCustomerOrderCopy(registration);
+  const { packageName, serviceTypeName } = getSelectionDetails(registration);
+  const { purchaseSummary } = buildPurchaseCopy(registration);
 
   return {
     order_reference: getPublicRequestReference(registration),
@@ -421,14 +484,23 @@ function buildOrderLogContext(registration) {
       normalizeTextValue(registration.domain_extension) ||
       normalizeTextValue(snapshot.domain_extension) ||
       null,
+    product_family: getNormalizedProductFamily(registration) || null,
     registrar_name: registrarName,
+    registrar_code:
+      normalizeTextValue(registration.registrar_code) ||
+      normalizeTextValue(snapshot.registrar_code) ||
+      null,
+    selection_kind: normalizeTextValue(registration.selection_kind) || null,
+    selected_offering_label: selectedOfferingLabel || null,
+    service_type_name: serviceTypeName || null,
     target_service: buildTargetServiceValue(registration),
-    package_name: packageName,
+    package_name: packageName || null,
     period: getBillingLabel({
       billingCycle: registration.billing_cycle,
       billingLabel: normalizeTextValue(snapshot.billing_label),
       billingPeriodMonths: registration.billing_period_months,
     }),
+    purchase_summary: purchaseSummary,
     quoted_price_ksh:
       registration.quoted_price_ksh === null || registration.quoted_price_ksh === undefined
         ? null
@@ -514,35 +586,90 @@ function generateExternalRequestIdCandidate() {
   return shuffleCharacters(characters).join('');
 }
 
+function buildDeliveryPayloadContext(registration) {
+  const orderLogContext = buildOrderLogContext(registration);
+
+  return {
+    domain_name: orderLogContext.domain_name,
+    order_reference: orderLogContext.order_reference,
+    package_name: orderLogContext.package_name,
+    period: orderLogContext.period,
+    product_family: orderLogContext.product_family,
+    quoted_price_ksh: orderLogContext.quoted_price_ksh,
+    registrar_name: orderLogContext.registrar_name,
+    selected_offering_label: orderLogContext.selected_offering_label,
+    service_type_name: orderLogContext.service_type_name,
+  };
+}
+
 function buildUserSmsMessage(registration) {
-  return buildShortOrderConfirmationMessage(registration, {
-    includeGreeting: true,
-    includeReference: true,
-  });
+  const publicRequestReference = getPublicRequestReference(registration);
+  const { customerName, formattedDomain, isDomainOnly, planName, registrarName } =
+    buildCustomerOrderCopy(registration);
+  const orderDescription = isDomainOnly
+    ? `domain registration for ${formattedDomain}`
+    : `${formattedDomain} with ${planName}`;
+
+  return `Hi ${customerName}, we have received your order for ${orderDescription}. Ref ${publicRequestReference}. ${registrarName} is processing it.`;
 }
 
 function buildUserAcknowledgementEmail(registration) {
   const publicRequestReference = getPublicRequestReference(registration);
-  const { customerName, formattedDomain, planName, registrarName } =
+  const snapshot = getRegistrationSnapshot(registration);
+  const {
+    customerName,
+    formattedDomain,
+    isDomainOnly,
+    packageName,
+    planName,
+    productLabel,
+    registrarName,
+    serviceTypeName,
+  } =
     buildCustomerOrderCopy(registration);
-  const subject = `Order Confirmed - ${formattedDomain}`;
+  const periodLabel = getBillingLabel({
+    billingCycle: registration.billing_cycle,
+    billingLabel: normalizeTextValue(snapshot.billing_label),
+    billingPeriodMonths: registration.billing_period_months,
+  });
+  const priceLabel = formatPrice(registration.quoted_price_ksh, registration.currency_code);
+  const selectionLabel = isDomainOnly ? 'Domain registration' : planName;
+  const subject = `Order Received - ${formattedDomain}`;
+  const detailRows = [
+    ['Order Reference', publicRequestReference],
+    ['Domain', formattedDomain],
+    ['Registrar', registrarName],
+    ['Product Family', productLabel],
+    !isDomainOnly && serviceTypeName ? ['Service Type', serviceTypeName] : null,
+    !isDomainOnly && packageName ? ['Package', packageName] : null,
+    ['Selection', selectionLabel],
+    ['Period', periodLabel],
+    ['Quoted Price', priceLabel],
+  ].filter(Boolean);
   const text = [
     `Hello ${customerName},`,
     '',
-    `Your order for ${formattedDomain} with ${planName} has been received and is being processed.`,
+    'We have received your order and started processing it.',
+    '',
+    'This is the request we are processing:',
+    ...detailRows.map(([label, value]) => `${label}: ${value}`),
     '',
     `Kindly await next steps from ${registrarName}.`,
-    '',
-    `Order Reference: ${publicRequestReference}`,
-  ]
-    .filter(Boolean)
-    .join('\n');
+  ].join('\n');
 
   const html = `
     <p>Hello ${customerName},</p>
-    <p>Your order for <strong>${formattedDomain}</strong> with <strong>${planName}</strong> has been received and is being processed.</p>
+    <p>We have received your order and started processing it.</p>
+    <p>This is the request we are processing:</p>
+    <ul>
+      ${detailRows
+        .map(
+          ([label, value]) =>
+            `<li><strong>${label}:</strong> ${value}</li>`
+        )
+        .join('')}
+    </ul>
     <p>Kindly await next steps from <strong>${registrarName}</strong>.</p>
-    <p><strong>Order Reference:</strong> ${publicRequestReference}</p>
   `;
 
   return { html, subject, text };
@@ -550,28 +677,48 @@ function buildUserAcknowledgementEmail(registration) {
 
 function buildRegistrarNotificationEmail(registration, registrar) {
   const publicRequestReference = getPublicRequestReference(registration);
-  const { formattedDomain, productLabel, purchaseAction, purchaseSummary, selectedOfferingLabel } =
-    buildPurchaseCopy(registration);
-  const subject = `New customer order for ${purchaseSummary}`;
+  const snapshot = getRegistrationSnapshot(registration);
+  const {
+    formattedDomain,
+    isDomainOnly,
+    packageName,
+    planName,
+    productLabel,
+    serviceTypeName,
+  } = buildCustomerOrderCopy(registration);
+  const { purchaseAction, purchaseSummary } = buildPurchaseCopy(registration);
+  const periodLabel = getBillingLabel({
+    billingCycle: registration.billing_cycle,
+    billingLabel: normalizeTextValue(snapshot.billing_label),
+    billingPeriodMonths: registration.billing_period_months,
+  });
+  const priceLabel = formatPrice(registration.quoted_price_ksh, registration.currency_code);
+  const selectionLabel = isDomainOnly ? 'Domain registration' : planName;
+  const detailRows = [
+    ['Order Reference', publicRequestReference],
+    ['Full Name', registration.full_name],
+    ['Email', registration.email],
+    ['Phone', registration.phone],
+    ['Domain', formattedDomain],
+    ['Order Summary', purchaseSummary],
+    ['Order Details', purchaseAction],
+    ['Product Family', productLabel],
+    !isDomainOnly && serviceTypeName ? ['Service Type', serviceTypeName] : null,
+    !isDomainOnly && packageName ? ['Package', packageName] : null,
+    ['Selection', selectionLabel],
+    ['Period', periodLabel],
+    ['Order Price', priceLabel],
+  ].filter(Boolean);
+  const subject = selectionLabel && !isDomainOnly
+    ? `New customer order - ${formattedDomain} - ${selectionLabel}`
+    : `New customer order - ${formattedDomain}`;
   const text = [
     `Hello ${registrar.name},`,
     '',
     'A new customer order has been placed on the platform.',
     '',
-    `Order Reference: ${publicRequestReference}`,
-    `Full Name: ${registration.full_name}`,
-    `Email: ${registration.email}`,
-    `Phone: ${registration.phone}`,
-    `Domain: ${formattedDomain}`,
-    `Order Details: ${purchaseAction}`,
-    `Product Family: ${productLabel}`,
-    `Selection: ${selectedOfferingLabel || 'Domain registration'}`,
-    `Package Name: ${registration.package_name || '—'}`,
-    `Period: ${getBillingLabel({
-      billingCycle: registration.billing_cycle,
-      billingPeriodMonths: registration.billing_period_months,
-    })}`,
-    `Order Price: ${formatPrice(registration.quoted_price_ksh, registration.currency_code)}`,
+    'This is the request to process:',
+    ...detailRows.map(([label, value]) => `${label}: ${value}`),
     '',
     'Please action it from your registrar workflow.',
   ].join('\n');
@@ -579,25 +726,15 @@ function buildRegistrarNotificationEmail(registration, registrar) {
   const html = `
     <p>Hello ${registrar.name},</p>
     <p>A new customer order has been placed on the platform.</p>
-    <p>
-      <strong>Order Reference:</strong> ${publicRequestReference}<br />
-      <strong>Full Name:</strong> ${registration.full_name}<br />
-      <strong>Email:</strong> ${registration.email}<br />
-      <strong>Phone:</strong> ${registration.phone}<br />
-      <strong>Domain:</strong> ${formattedDomain}<br />
-      <strong>Order Details:</strong> ${purchaseAction}<br />
-      <strong>Product Family:</strong> ${productLabel}<br />
-      <strong>Selection:</strong> ${selectedOfferingLabel || 'Domain registration'}<br />
-      <strong>Package Name:</strong> ${registration.package_name || '—'}<br />
-      <strong>Period:</strong> ${getBillingLabel({
-        billingCycle: registration.billing_cycle,
-        billingPeriodMonths: registration.billing_period_months,
-      })}<br />
-      <strong>Order Price:</strong> ${formatPrice(
-        registration.quoted_price_ksh,
-        registration.currency_code
-      )}
-    </p>
+    <p>This is the request to process:</p>
+    <ul>
+      ${detailRows
+        .map(
+          ([label, value]) =>
+            `<li><strong>${label}:</strong> ${value}</li>`
+        )
+        .join('')}
+    </ul>
     <p>Please action it from your registrar workflow.</p>
   `;
 
@@ -1319,7 +1456,10 @@ async function sendUserSmsAcknowledgement(registration) {
     recipientType: 'user',
     destination: registration.phone,
     templateKey: 'registration_ack_sms',
-    payload: { message },
+    payload: {
+      message,
+      ...buildDeliveryPayloadContext(registration),
+    },
     handler: async () => sendSms(registration.phone, message),
   });
 
@@ -1368,7 +1508,10 @@ async function sendUserEmailAcknowledgement(registration) {
     destination: registration.email,
     templateKey: 'registration_ack_email',
     subject: emailContent.subject,
-    payload: { subject: emailContent.subject },
+    payload: {
+      subject: emailContent.subject,
+      ...buildDeliveryPayloadContext(registration),
+    },
     handler: async () =>
       sendEmail({
         to: registration.email,
@@ -1400,6 +1543,7 @@ async function sendRegistrarEmailNotification(registration, registrar) {
     templateKey: 'registrar_registration_email',
     subject: emailContent.subject,
     payload: {
+      ...buildDeliveryPayloadContext(registration),
       registrar_name: registrar.name,
       subject: emailContent.subject,
     },

@@ -4,8 +4,23 @@ const {
   normalizeRegistrationInput,
 } = require('../utils/validation');
 
+function normalizeTextValue(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 exports.createRegistration = async (req, res) => {
   const payload = normalizeRegistrationInput(req.body);
+  const selectionSnapshot =
+    payload.selection_snapshot_json && typeof payload.selection_snapshot_json === 'object'
+      ? payload.selection_snapshot_json
+      : {};
+  const serviceTypeName =
+    normalizeTextValue(selectionSnapshot.service_name) ||
+    normalizeTextValue(selectionSnapshot.service_type_name) ||
+    normalizeTextValue(selectionSnapshot.summary_label);
+  const selectedOfferingLabel = normalizeTextValue(
+    selectionSnapshot.selected_offering_label
+  );
 
   console.log('---- ORDER RECEIVED ----', {
     full_name: payload.full_name,
@@ -13,7 +28,12 @@ exports.createRegistration = async (req, res) => {
     phone: payload.phone,
     domain_name: payload.domain_name,
     domain_extension: payload.domain_extension,
+    product_family: payload.product_family || null,
+    selection_kind: payload.selection_kind || null,
+    service_type_name: serviceTypeName,
     package_name: payload.package_name || null,
+    selected_offering_label: selectedOfferingLabel,
+    registrar_code: payload.registrar_code || null,
     registrar_name: payload.registrar_name,
     target_service:
       payload.service_product_code || payload.target_service || payload.product_family || null,
@@ -33,7 +53,7 @@ exports.createRegistration = async (req, res) => {
 
     const userMessage =
       registration.message ||
-      'Your order has been received and is being processed. Kindly await next steps from the selected registrar.';
+      'We have received your order and it is being processed. Kindly await next steps from the selected registrar.';
 
     return res.status(201).json({
       request_id: registration.external_request_id || registration.request_id,
