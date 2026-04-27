@@ -13,9 +13,18 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 CREATE TABLE IF NOT EXISTS registrations (
     request_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     external_request_id character varying(10) NOT NULL,
-    full_name character varying(255) NOT NULL,
+    first_name character varying(120),
+    last_name character varying(120),
+    full_name character varying(255),
     email character varying(255) NOT NULL,
     phone character varying(50) NOT NULL,
+    company_name character varying(255),
+    kra_pin character varying(20),
+    street_address character varying(255),
+    city character varying(120),
+    country character varying(120),
+    state character varying(120),
+    postcode character varying(20),
     domain_name character varying(255) NOT NULL,
     target_service character varying(120),
     product_family character varying(120),
@@ -83,29 +92,79 @@ CREATE TABLE IF NOT EXISTS registrars (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     registrar_code character varying(16) NOT NULL DEFAULT ('REG' || LPAD(nextval('registrar_code_seq')::text, 3, '0')),
     name character varying(255) NOT NULL,
-    primary_email character varying(255),
-    primary_phone character varying(50),
-    api_endpoint text,
-    notification_email character varying(255),
+    primary_email character varying(255) NOT NULL,
+    primary_phone character varying(50) NOT NULL,
+    api_endpoint text NOT NULL,
+    notification_email character varying(255) NOT NULL,
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    is_active boolean DEFAULT true,
+    is_active boolean NOT NULL DEFAULT true,
     updated_by_actor_type character varying(50),
     updated_by_actor_id character varying(255),
-    CONSTRAINT registrars_registrar_code_format_check CHECK (registrar_code ~ '^REG[0-9]{3,}$')
+    CONSTRAINT registrars_registrar_code_format_check CHECK (registrar_code ~ '^REG[0-9]{3,}$'),
+    CONSTRAINT registrars_name_not_blank_check CHECK (BTRIM(name) <> ''),
+    CONSTRAINT registrars_primary_email_not_blank_check CHECK (BTRIM(primary_email) <> ''),
+    CONSTRAINT registrars_primary_phone_not_blank_check CHECK (BTRIM(primary_phone) <> ''),
+    CONSTRAINT registrars_api_endpoint_not_blank_check CHECK (BTRIM(api_endpoint) <> ''),
+    CONSTRAINT registrars_notification_email_not_blank_check CHECK (BTRIM(notification_email) <> '')
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_registrars_registrar_code
     ON registrars (registrar_code);
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_registrars_name_unique
+    ON registrars (LOWER(BTRIM(name)));
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_registrars_primary_email_unique
+    ON registrars (LOWER(BTRIM(primary_email)))
+    WHERE primary_email IS NOT NULL
+      AND BTRIM(primary_email) <> '';
+
 CREATE INDEX IF NOT EXISTS idx_registrars_primary_email
     ON registrars (LOWER(primary_email));
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_registrars_primary_phone_unique
+    ON registrars (regexp_replace(BTRIM(primary_phone), '[^0-9+]', '', 'g'))
+    WHERE primary_phone IS NOT NULL
+      AND BTRIM(primary_phone) <> '';
 
 CREATE INDEX IF NOT EXISTS idx_registrars_primary_phone
     ON registrars (primary_phone);
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_registrars_notification_email_unique
+    ON registrars (LOWER(BTRIM(notification_email)))
+    WHERE notification_email IS NOT NULL
+      AND BTRIM(notification_email) <> '';
+
 CREATE INDEX IF NOT EXISTS idx_registrars_updated_at
     ON registrars (updated_at);
+
+CREATE TABLE IF NOT EXISTS registrar_deletion_audit (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    registrar_id uuid NOT NULL,
+    registrar_code character varying(16),
+    registrar_name character varying(255) NOT NULL,
+    primary_email character varying(255),
+    primary_phone character varying(50),
+    notification_email character varying(255),
+    api_endpoint text,
+    was_active boolean,
+    deleted_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_by_actor_type character varying(50) NOT NULL,
+    deleted_by_actor_id character varying(255),
+    confirmation_phrase character varying(50),
+    snapshot_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+    deletion_summary_json jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_registrar_deletion_audit_registrar_id
+    ON registrar_deletion_audit (registrar_id);
+
+CREATE INDEX IF NOT EXISTS idx_registrar_deletion_audit_registrar_code
+    ON registrar_deletion_audit (registrar_code);
+
+CREATE INDEX IF NOT EXISTS idx_registrar_deletion_audit_deleted_at
+    ON registrar_deletion_audit (deleted_at DESC);
 
 CREATE TABLE IF NOT EXISTS registrar_requests (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -290,11 +349,11 @@ CREATE TABLE IF NOT EXISTS registrar_domain_offerings (
     is_active boolean NOT NULL DEFAULT true,
     created_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT registrar_domain_offerings_registration_price_check CHECK (registration_price_ksh >= 0),
-    CONSTRAINT registrar_domain_offerings_renewal_price_check CHECK (renewal_price_ksh IS NULL OR renewal_price_ksh >= 0),
-    CONSTRAINT registrar_domain_offerings_transfer_price_check CHECK (transfer_price_ksh IS NULL OR transfer_price_ksh >= 0),
-    CONSTRAINT registrar_domain_offerings_setup_fee_check CHECK (setup_fee_ksh >= 0),
-    CONSTRAINT registrar_domain_offerings_billing_period_check CHECK (billing_period_months > 0)
+    CONSTRAINT registrar_domain_offerings_registration_price_check CHECK (registration_price_ksh >= 0 AND registration_price_ksh <= 50000),
+    CONSTRAINT registrar_domain_offerings_renewal_price_check CHECK (renewal_price_ksh IS NULL OR (renewal_price_ksh >= 0 AND renewal_price_ksh <= 50000)),
+    CONSTRAINT registrar_domain_offerings_transfer_price_check CHECK (transfer_price_ksh IS NULL OR (transfer_price_ksh >= 0 AND transfer_price_ksh <= 50000)),
+    CONSTRAINT registrar_domain_offerings_setup_fee_check CHECK (setup_fee_ksh >= 0 AND setup_fee_ksh <= 50000),
+    CONSTRAINT registrar_domain_offerings_billing_period_check CHECK (billing_period_months > 0 AND billing_period_months <= 24)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_registrar_domain_offerings_unique
@@ -318,9 +377,9 @@ CREATE TABLE IF NOT EXISTS registrar_service_offerings (
     is_active boolean NOT NULL DEFAULT true,
     created_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT registrar_service_offerings_price_check CHECK (price_ksh >= 0),
-    CONSTRAINT registrar_service_offerings_setup_fee_check CHECK (setup_fee_ksh >= 0),
-    CONSTRAINT registrar_service_offerings_billing_period_check CHECK (billing_period_months > 0)
+    CONSTRAINT registrar_service_offerings_price_check CHECK (price_ksh >= 0 AND price_ksh <= 50000),
+    CONSTRAINT registrar_service_offerings_setup_fee_check CHECK (setup_fee_ksh >= 0 AND setup_fee_ksh <= 50000),
+    CONSTRAINT registrar_service_offerings_billing_period_check CHECK (billing_period_months > 0 AND billing_period_months <= 24)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_registrar_service_offerings_unique
@@ -334,7 +393,7 @@ CREATE TABLE IF NOT EXISTS registrar_service_packages (
     registrar_id uuid NOT NULL,
     service_product_id uuid NOT NULL,
     package_code character varying(120) NOT NULL,
-    package_name character varying(255) NOT NULL,
+    package_name character varying(255),
     short_description text,
     details_json jsonb NOT NULL DEFAULT '{}'::jsonb,
     feature_bullets_json jsonb NOT NULL DEFAULT '[]'::jsonb,
@@ -347,6 +406,10 @@ CREATE TABLE IF NOT EXISTS registrar_service_packages (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_registrar_service_packages_unique
     ON registrar_service_packages (registrar_id, service_product_id, package_code);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_registrar_service_packages_single_unnamed
+    ON registrar_service_packages (registrar_id, service_product_id)
+    WHERE package_name IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_registrar_service_packages_registrar_id
     ON registrar_service_packages (registrar_id);
@@ -367,9 +430,9 @@ CREATE TABLE IF NOT EXISTS registrar_service_package_prices (
     is_active boolean NOT NULL DEFAULT true,
     created_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT registrar_service_package_prices_price_check CHECK (price_ksh >= 0),
-    CONSTRAINT registrar_service_package_prices_setup_fee_check CHECK (setup_fee_ksh >= 0),
-    CONSTRAINT registrar_service_package_prices_billing_period_check CHECK (billing_period_months > 0)
+    CONSTRAINT registrar_service_package_prices_price_check CHECK (price_ksh >= 0 AND price_ksh <= 50000),
+    CONSTRAINT registrar_service_package_prices_setup_fee_check CHECK (setup_fee_ksh >= 0 AND setup_fee_ksh <= 50000),
+    CONSTRAINT registrar_service_package_prices_billing_period_check CHECK (billing_period_months > 0 AND billing_period_months <= 24)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_registrar_service_package_prices_unique

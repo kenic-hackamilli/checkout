@@ -823,7 +823,7 @@ async function getServicePackagePriceRows({
       ORDER BY
         LOWER(r.name) ASC,
         rsp.display_order ASC,
-        LOWER(rsp.package_name) ASC,
+        LOWER(COALESCE(rsp.package_name, '')) ASC,
         rspp.is_default DESC,
         rspp.price_ksh ASC,
         rspp.billing_period_months ASC

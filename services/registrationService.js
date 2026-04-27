@@ -254,15 +254,14 @@ function getSelectionDetails(registration) {
 
   return {
     packageName:
+      normalizeTextValue(snapshot.package) ||
       normalizeTextValue(registration.package_name) ||
       normalizeTextValue(snapshot.package_name),
     serviceTypeName:
+      normalizeTextValue(snapshot.type) ||
       normalizeTextValue(snapshot.service_name) ||
       normalizeTextValue(snapshot.service_type_name) ||
       normalizeTextValue(snapshot.summary_label),
-    snapshotSelectedOfferingLabel: normalizeTextValue(
-      snapshot.selected_offering_label
-    ),
   };
 }
 
@@ -275,50 +274,105 @@ function isDomainOnlySelection(registration) {
   );
 }
 
-function buildSelectedOfferingLabel(registration) {
-  const productFamily = getNormalizedProductFamily(registration);
-  const { descriptorKeywords, offeringLabel } = getProductFamilyCopy(productFamily);
-  const { packageName, serviceTypeName, snapshotSelectedOfferingLabel } =
-    getSelectionDetails(registration);
-  const structuredSelectionLabel = serviceTypeName
-    ? buildServiceSelectionLabel({
-        packageName,
-        serviceTypeName,
-      })
-    : '';
+function getNumericSnapshotValue(snapshot, keys = []) {
+  for (const key of keys) {
+    const value = snapshot ? snapshot[key] : null;
 
-  if (structuredSelectionLabel) {
-    return structuredSelectionLabel;
+    if (value === null || value === undefined || value === '') {
+      continue;
+    }
+
+    const normalizedValue = Number(value);
+    if (Number.isFinite(normalizedValue)) {
+      return normalizedValue;
+    }
   }
 
-  if (snapshotSelectedOfferingLabel) {
-    return snapshotSelectedOfferingLabel;
-  }
-
-  if (!packageName) {
-    return `selected ${offeringLabel}`;
-  }
-
-  const normalizedPackageName = packageName.toLowerCase();
-  const keywordCandidates = [
-    ...descriptorKeywords,
-    offeringLabel.toLowerCase(),
-    serviceTypeName.toLowerCase(),
-  ].filter(Boolean);
-
-  if (keywordCandidates.some((keyword) => normalizedPackageName.includes(keyword))) {
-    return packageName;
-  }
-
-  return `${packageName} ${offeringLabel}`;
+  return null;
 }
 
-function buildPurchaseCopy(registration) {
+function buildSelectionSummary(registration) {
+  const snapshot = getRegistrationSnapshot(registration);
   const formattedDomain = formatDomainName(registration.domain_name) || 'your selected domain';
   const isDomainOnly = isDomainOnlySelection(registration);
   const productFamily = getNormalizedProductFamily(registration);
   const { productLabel } = getProductFamilyCopy(productFamily);
-  const selectedOfferingLabel = isDomainOnly ? null : buildSelectedOfferingLabel(registration);
+  const { packageName, serviceTypeName } = getSelectionDetails(registration);
+  const plusService =
+    normalizeTextValue(snapshot.plus) ||
+    (!isDomainOnly ? productLabel : '');
+  const period =
+    normalizeTextValue(snapshot.period) ||
+    getBillingLabel({
+      billingCycle: registration.billing_cycle,
+      billingLabel: normalizeTextValue(snapshot.billing_label),
+      billingPeriodMonths: registration.billing_period_months,
+    });
+  const currencyCode =
+    normalizeTextValue(snapshot.currency_code) ||
+    normalizeTextValue(registration.currency_code) ||
+    'KES';
+  const priceKsh =
+    getNumericSnapshotValue(snapshot, ['price_ksh', 'quoted_price_ksh']) ??
+    (registration.quoted_price_ksh === null || registration.quoted_price_ksh === undefined
+      ? null
+      : Number(registration.quoted_price_ksh));
+
+  return {
+    currencyCode,
+    domainExtension:
+      normalizeTextValue(snapshot.domain_extension) ||
+      normalizeTextValue(registration.domain_extension) ||
+      null,
+    formattedDomain,
+    isDomainOnly,
+    packageName: !isDomainOnly && packageName ? packageName : null,
+    period: period || null,
+    plusService: !isDomainOnly && plusService ? plusService : null,
+    priceKsh,
+    registrarName:
+      normalizeTextValue(snapshot.registrar_name) || getSafeRegistrarName(registration),
+    serviceTypeName: !isDomainOnly && serviceTypeName ? serviceTypeName : null,
+  };
+}
+
+function buildSelectionSnapshotSummary({
+  currency_code,
+  domain_extension,
+  domain_name,
+  packageName,
+  period,
+  plus,
+  price_ksh,
+  registrar_name,
+  type,
+}) {
+  return {
+    currency_code: normalizeTextValue(currency_code) || null,
+    domain_extension: normalizeTextValue(domain_extension) || null,
+    domain_name: formatDomainName(domain_name),
+    package: normalizeTextValue(packageName) || null,
+    period: normalizeTextValue(period) || null,
+    plus: normalizeTextValue(plus) || null,
+    price_ksh:
+      price_ksh === null || price_ksh === undefined || Number.isNaN(Number(price_ksh))
+        ? null
+        : Number(price_ksh),
+    registrar_name: normalizeTextValue(registrar_name) || null,
+    type: normalizeTextValue(type) || null,
+  };
+}
+
+function buildPurchaseCopy(registration) {
+  const {
+    formattedDomain,
+    isDomainOnly,
+    packageName,
+    plusService,
+    serviceTypeName,
+  } = buildSelectionSummary(registration);
+  const selectedOfferingLabel =
+    packageName || serviceTypeName || plusService || null;
   const purchaseSummary = isDomainOnly
     ? `domain registration for ${formattedDomain}`
     : `domain registration for ${formattedDomain} with ${selectedOfferingLabel}`;
@@ -329,7 +383,6 @@ function buildPurchaseCopy(registration) {
   return {
     formattedDomain,
     isDomainOnly,
-    productLabel,
     purchaseAction,
     purchaseSummary,
     selectedOfferingLabel,
@@ -337,32 +390,30 @@ function buildPurchaseCopy(registration) {
 }
 
 function buildRegistrarPayload(registration) {
-  const selectionSnapshot = {
-    ...getRegistrationSnapshot(registration),
-  };
-
-  delete selectionSnapshot.selected_offering_label;
+  const selectionSummary = buildSelectionSummary(registration);
 
   return {
     order_reference: getPublicRequestReference(registration),
-    billing_cycle: registration.billing_cycle || null,
-    billing_period_months: registration.billing_period_months || null,
-    domain_name: registration.domain_name,
-    domain_extension: registration.domain_extension || null,
-    domain_offering_id: registration.domain_offering_id || null,
-    email: registration.email,
-    full_name: registration.full_name,
-    package_code: registration.package_code || null,
-    package_name: registration.package_name || null,
+    domain_name: formatDomainName(registration.domain_name) || registration.domain_name,
+    domain_extension: selectionSummary.domainExtension,
+    first_name: registration.first_name || null,
+    last_name: registration.last_name || null,
     phone: registration.phone,
-    product_family: registration.product_family || null,
-    quoted_price_ksh: registration.quoted_price_ksh || null,
-    selection_kind: registration.selection_kind || null,
-    selection_snapshot_json: selectionSnapshot,
-    service_package_id: registration.service_package_id || null,
-    service_package_price_id: registration.service_package_price_id || null,
-    service_product_code: registration.service_product_code || null,
-    target_service: registration.target_service || null,
+    email: registration.email,
+    company_name: registration.company_name || null,
+    kra_pin: registration.kra_pin || null,
+    street_address: registration.street_address || null,
+    city: registration.city || null,
+    state: registration.state || null,
+    postcode: registration.postcode || null,
+    country: registration.country || null,
+    plus: selectionSummary.plusService,
+    type: selectionSummary.serviceTypeName,
+    package: selectionSummary.packageName,
+    registrar_name: selectionSummary.registrarName,
+    price_ksh: selectionSummary.priceKsh,
+    currency_code: selectionSummary.currencyCode,
+    period: selectionSummary.period,
   };
 }
 
@@ -372,56 +423,147 @@ function getSafeRegistrarName(registration) {
     : 'the selected registrar';
 }
 
+function buildCustomerFullName(registration) {
+  const fullName = normalizeTextValue(registration.full_name);
+
+  if (fullName) {
+    return fullName;
+  }
+
+  return [
+    normalizeTextValue(registration.first_name),
+    normalizeTextValue(registration.last_name),
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
 function getSafeCustomerName(registration) {
-  return normalizeTextValue(registration.full_name) || 'there';
+  return (
+    normalizeTextValue(registration.first_name) ||
+    buildCustomerFullName(registration) ||
+    'there'
+  );
+}
+
+function maskKraPin(value) {
+  const normalizedValue = normalizeTextValue(value);
+
+  if (!normalizedValue) {
+    return '';
+  }
+
+  if (normalizedValue.length <= 2) {
+    return normalizedValue;
+  }
+
+  return `${normalizedValue[0]}${'*'.repeat(normalizedValue.length - 2)}${
+    normalizedValue[normalizedValue.length - 1]
+  }`;
 }
 
 function buildCustomerOrderCopy(registration) {
-  const { formattedDomain, isDomainOnly, productLabel, selectedOfferingLabel } =
-    buildPurchaseCopy(registration);
-  const { packageName, serviceTypeName, snapshotSelectedOfferingLabel } =
-    getSelectionDetails(registration);
-  const resolvedSelectionLabel =
-    selectedOfferingLabel || snapshotSelectedOfferingLabel || null;
+  const selectionSummary = buildSelectionSummary(registration);
+  const planName =
+    selectionSummary.packageName ||
+    selectionSummary.serviceTypeName ||
+    selectionSummary.plusService ||
+    'Domain registration';
 
   return {
     customerName: getSafeCustomerName(registration),
-    formattedDomain,
-    isDomainOnly,
-    packageName: packageName || null,
-    planName:
-      isDomainOnly
-        ? 'Domain registration'
-        : resolvedSelectionLabel ||
-          packageName ||
-          serviceTypeName ||
-          (productLabel === 'Domain Registration'
-            ? 'Domain registration'
-            : productLabel || 'selected plan'),
-    registrarName: getSafeRegistrarName(registration),
-    productLabel,
-    selectedOfferingLabel: resolvedSelectionLabel,
-    serviceTypeName: serviceTypeName || null,
+    formattedDomain: selectionSummary.formattedDomain,
+    isDomainOnly: selectionSummary.isDomainOnly,
+    packageName: selectionSummary.packageName,
+    planName: selectionSummary.isDomainOnly ? 'Domain registration' : planName,
+    registrarName: selectionSummary.registrarName,
+    productLabel: selectionSummary.plusService || 'Domain Registration',
+    selectedOfferingLabel:
+      selectionSummary.packageName || selectionSummary.serviceTypeName || null,
+    serviceTypeName: selectionSummary.serviceTypeName,
   };
+}
+
+function buildCommunicationOrderRows(
+  registration,
+  { includePeriod = false, includePrice = false, includeRegistrar = false } = {}
+) {
+  const selectionSummary = buildSelectionSummary(registration);
+  const rows = [['Domain', selectionSummary.formattedDomain]];
+
+  if (!selectionSummary.isDomainOnly) {
+    rows.push(['Plus', selectionSummary.plusService]);
+
+    if (selectionSummary.serviceTypeName) {
+      rows.push(['Type', selectionSummary.serviceTypeName]);
+    }
+
+    if (selectionSummary.packageName) {
+      rows.push(['Package', selectionSummary.packageName]);
+    }
+  }
+
+  if (includePeriod) {
+    rows.push(['Period', selectionSummary.period]);
+  }
+
+  if (includePrice) {
+    rows.push(['Price', formatPrice(selectionSummary.priceKsh, selectionSummary.currencyCode)]);
+  }
+
+  if (includeRegistrar) {
+    rows.push(['Registrar', selectionSummary.registrarName]);
+  }
+
+  return rows.filter(([, value]) => Boolean(value));
+}
+
+function buildSubmittedCustomerRows(registration) {
+  return [
+    ['First Name', normalizeTextValue(registration.first_name)],
+    ['Last Name', normalizeTextValue(registration.last_name)],
+    ['Phone', normalizeTextValue(registration.phone)],
+    ['Email', normalizeTextValue(registration.email)],
+    ['Company Name', normalizeTextValue(registration.company_name)],
+    ['KRA PIN', maskKraPin(registration.kra_pin)],
+    ['Street Address', normalizeTextValue(registration.street_address)],
+    ['City', normalizeTextValue(registration.city)],
+    ['State', normalizeTextValue(registration.state)],
+    ['Post Code', normalizeTextValue(registration.postcode)],
+    ['Country', normalizeTextValue(registration.country)],
+  ].filter(([, value]) => Boolean(value));
+}
+
+function buildDetailLines(rows = []) {
+  return rows.map(([label, value]) => `${label}: ${value}`);
+}
+
+function buildDetailListHtml(rows = []) {
+  return `<ul>${rows
+    .map(([label, value]) => `<li><strong>${label}:</strong> ${value}</li>`)
+    .join('')}</ul>`;
 }
 
 function buildShortOrderConfirmationMessage(
   registration,
   { includeGreeting = true, includeReference = false } = {}
 ) {
-  const { customerName, formattedDomain, isDomainOnly, planName, registrarName } =
-    buildCustomerOrderCopy(registration);
-  const orderDescription = isDomainOnly
-    ? `domain registration for ${formattedDomain}`
-    : `${formattedDomain} together with ${planName}`;
-  const opening = includeGreeting
-    ? `Hi ${customerName}, we have received your order for ${orderDescription} and it is now being processed.`
-    : `We have received your order for ${orderDescription} and it is now being processed.`;
-  const referenceSuffix = includeReference
-    ? ` Ref: ${getPublicRequestReference(registration)}.`
-    : '';
+  const { customerName, registrarName } = buildCustomerOrderCopy(registration);
+  const detailLines = buildDetailLines(buildCommunicationOrderRows(registration));
 
-  return `${opening} Kindly await next steps from ${registrarName}.${referenceSuffix}`;
+  return [
+    includeGreeting
+      ? `Hi ${customerName}, we have received your order and it is now being processed.`
+      : 'We have received your order and it is now being processed.',
+    '',
+    'Order Details:',
+    ...detailLines,
+    '',
+    `Kindly await next steps from ${registrarName}.`,
+    ...(includeReference
+      ? [`Order Reference: ${getPublicRequestReference(registration)}`]
+      : []),
+  ].join('\n');
 }
 
 function buildClientAcknowledgementMessage(registration) {
@@ -429,15 +571,20 @@ function buildClientAcknowledgementMessage(registration) {
 }
 
 function buildActiveDomainOrderConflictMessage(existingRegistration) {
-  const { formattedDomain, isDomainOnly, planName, registrarName } =
-    buildCustomerOrderCopy(existingRegistration);
-  const orderDescription = isDomainOnly
-    ? `domain registration for ${formattedDomain}`
-    : `${formattedDomain} together with ${planName}`;
+  const { registrarName } = buildCustomerOrderCopy(existingRegistration);
+  const detailLines = buildDetailLines(
+    buildCommunicationOrderRows(existingRegistration)
+  );
 
-  return `This domain already has an active order for ${orderDescription}. Kindly await next steps from ${registrarName}. Order Reference: ${getPublicRequestReference(
-    existingRegistration
-  )}.`;
+  return [
+    'This domain already has an active order in progress.',
+    '',
+    'Order Details:',
+    ...detailLines,
+    '',
+    `Kindly await next steps from ${registrarName}.`,
+    `Order Reference: ${getPublicRequestReference(existingRegistration)}`,
+  ].join('\n');
 }
 
 function getPublicRequestReference(registration) {
@@ -468,43 +615,31 @@ function buildTargetServiceValue(registration) {
 }
 
 function buildOrderLogContext(registration) {
-  const snapshot = getRegistrationSnapshot(registration);
-  const { formattedDomain, registrarName, selectedOfferingLabel } =
-    buildCustomerOrderCopy(registration);
-  const { packageName, serviceTypeName } = getSelectionDetails(registration);
-  const { purchaseSummary } = buildPurchaseCopy(registration);
+  const selectionSummary = buildSelectionSummary(registration);
 
   return {
     order_reference: getPublicRequestReference(registration),
-    full_name: normalizeTextValue(registration.full_name) || null,
-    email: normalizeTextValue(registration.email) || null,
+    first_name: normalizeTextValue(registration.first_name) || null,
+    last_name: normalizeTextValue(registration.last_name) || null,
     phone: normalizeTextValue(registration.phone) || null,
-    domain_name: formattedDomain || normalizeTextValue(registration.domain_name) || null,
-    domain_extension:
-      normalizeTextValue(registration.domain_extension) ||
-      normalizeTextValue(snapshot.domain_extension) ||
+    email: normalizeTextValue(registration.email) || null,
+    company_name: normalizeTextValue(registration.company_name) || null,
+    city: normalizeTextValue(registration.city) || null,
+    state: normalizeTextValue(registration.state) || null,
+    postcode: normalizeTextValue(registration.postcode) || null,
+    country: normalizeTextValue(registration.country) || null,
+    domain_name:
+      selectionSummary.formattedDomain ||
+      normalizeTextValue(registration.domain_name) ||
       null,
-    product_family: getNormalizedProductFamily(registration) || null,
-    registrar_name: registrarName,
-    registrar_code:
-      normalizeTextValue(registration.registrar_code) ||
-      normalizeTextValue(snapshot.registrar_code) ||
-      null,
-    selection_kind: normalizeTextValue(registration.selection_kind) || null,
-    selected_offering_label: selectedOfferingLabel || null,
-    service_type_name: serviceTypeName || null,
-    target_service: buildTargetServiceValue(registration),
-    package_name: packageName || null,
-    period: getBillingLabel({
-      billingCycle: registration.billing_cycle,
-      billingLabel: normalizeTextValue(snapshot.billing_label),
-      billingPeriodMonths: registration.billing_period_months,
-    }),
-    purchase_summary: purchaseSummary,
-    quoted_price_ksh:
-      registration.quoted_price_ksh === null || registration.quoted_price_ksh === undefined
-        ? null
-        : Number(registration.quoted_price_ksh),
+    domain_extension: selectionSummary.domainExtension,
+    plus: selectionSummary.plusService,
+    type: selectionSummary.serviceTypeName,
+    package: selectionSummary.packageName,
+    registrar_name: selectionSummary.registrarName,
+    period: selectionSummary.period,
+    currency_code: selectionSummary.currencyCode,
+    price_ksh: selectionSummary.priceKsh,
   };
 }
 
@@ -591,68 +726,59 @@ function buildDeliveryPayloadContext(registration) {
 
   return {
     domain_name: orderLogContext.domain_name,
+    domain_extension: orderLogContext.domain_extension,
     order_reference: orderLogContext.order_reference,
-    package_name: orderLogContext.package_name,
+    plus: orderLogContext.plus,
+    type: orderLogContext.type,
+    package: orderLogContext.package,
     period: orderLogContext.period,
-    product_family: orderLogContext.product_family,
-    quoted_price_ksh: orderLogContext.quoted_price_ksh,
+    price_ksh: orderLogContext.price_ksh,
+    currency_code: orderLogContext.currency_code,
     registrar_name: orderLogContext.registrar_name,
-    selected_offering_label: orderLogContext.selected_offering_label,
-    service_type_name: orderLogContext.service_type_name,
   };
 }
 
 function buildUserSmsMessage(registration) {
   const publicRequestReference = getPublicRequestReference(registration);
-  const { customerName, formattedDomain, isDomainOnly, planName, registrarName } =
+  const { customerName, registrarName } =
     buildCustomerOrderCopy(registration);
-  const orderDescription = isDomainOnly
-    ? `domain registration for ${formattedDomain}`
-    : `${formattedDomain} with ${planName}`;
+  const detailRows = buildCommunicationOrderRows(registration);
+  const detailSegments = detailRows.map(([label, value]) => `${label}: ${value}.`);
 
-  return `Hi ${customerName}, we have received your order for ${orderDescription}. Ref ${publicRequestReference}. ${registrarName} is processing it.`;
+  return [
+    `Hi ${customerName}, we have received your order.`,
+    ...detailSegments,
+    `Ref ${publicRequestReference}.`,
+    `${registrarName} is processing it.`,
+  ].join(' ');
 }
 
 function buildUserAcknowledgementEmail(registration) {
   const publicRequestReference = getPublicRequestReference(registration);
-  const snapshot = getRegistrationSnapshot(registration);
-  const {
-    customerName,
-    formattedDomain,
-    isDomainOnly,
-    packageName,
-    planName,
-    productLabel,
-    registrarName,
-    serviceTypeName,
-  } =
-    buildCustomerOrderCopy(registration);
-  const periodLabel = getBillingLabel({
-    billingCycle: registration.billing_cycle,
-    billingLabel: normalizeTextValue(snapshot.billing_label),
-    billingPeriodMonths: registration.billing_period_months,
-  });
-  const priceLabel = formatPrice(registration.quoted_price_ksh, registration.currency_code);
-  const selectionLabel = isDomainOnly ? 'Domain registration' : planName;
+  const { customerName, formattedDomain, registrarName } = buildCustomerOrderCopy(registration);
+  const orderDetailRows = [
+    ['Order Reference', publicRequestReference],
+    ...buildCommunicationOrderRows(registration, {
+      includePeriod: true,
+      includePrice: true,
+      includeRegistrar: true,
+    }),
+  ];
+  const customerDetailRows = buildSubmittedCustomerRows(registration);
   const subject = `Order Received - ${formattedDomain}`;
   const detailRows = [
-    ['Order Reference', publicRequestReference],
-    ['Domain', formattedDomain],
-    ['Registrar', registrarName],
-    ['Product Family', productLabel],
-    !isDomainOnly && serviceTypeName ? ['Service Type', serviceTypeName] : null,
-    !isDomainOnly && packageName ? ['Package', packageName] : null,
-    ['Selection', selectionLabel],
-    ['Period', periodLabel],
-    ['Quoted Price', priceLabel],
-  ].filter(Boolean);
+    'Order Details:',
+    ...buildDetailLines(orderDetailRows),
+    '',
+    'Submitted Details:',
+    ...buildDetailLines(customerDetailRows),
+  ];
   const text = [
     `Hello ${customerName},`,
     '',
     'We have received your order and started processing it.',
     '',
-    'This is the request we are processing:',
-    ...detailRows.map(([label, value]) => `${label}: ${value}`),
+    ...detailRows,
     '',
     `Kindly await next steps from ${registrarName}.`,
   ].join('\n');
@@ -660,15 +786,10 @@ function buildUserAcknowledgementEmail(registration) {
   const html = `
     <p>Hello ${customerName},</p>
     <p>We have received your order and started processing it.</p>
-    <p>This is the request we are processing:</p>
-    <ul>
-      ${detailRows
-        .map(
-          ([label, value]) =>
-            `<li><strong>${label}:</strong> ${value}</li>`
-        )
-        .join('')}
-    </ul>
+    <p><strong>Order Details</strong></p>
+    ${buildDetailListHtml(orderDetailRows)}
+    <p><strong>Submitted Details</strong></p>
+    ${buildDetailListHtml(customerDetailRows)}
     <p>Kindly await next steps from <strong>${registrarName}</strong>.</p>
   `;
 
@@ -677,48 +798,29 @@ function buildUserAcknowledgementEmail(registration) {
 
 function buildRegistrarNotificationEmail(registration, registrar) {
   const publicRequestReference = getPublicRequestReference(registration);
-  const snapshot = getRegistrationSnapshot(registration);
-  const {
-    formattedDomain,
-    isDomainOnly,
-    packageName,
-    planName,
-    productLabel,
-    serviceTypeName,
-  } = buildCustomerOrderCopy(registration);
-  const { purchaseAction, purchaseSummary } = buildPurchaseCopy(registration);
-  const periodLabel = getBillingLabel({
-    billingCycle: registration.billing_cycle,
-    billingLabel: normalizeTextValue(snapshot.billing_label),
-    billingPeriodMonths: registration.billing_period_months,
-  });
-  const priceLabel = formatPrice(registration.quoted_price_ksh, registration.currency_code);
-  const selectionLabel = isDomainOnly ? 'Domain registration' : planName;
-  const detailRows = [
+  const { formattedDomain, isDomainOnly, planName } = buildCustomerOrderCopy(registration);
+  const orderDetailRows = [
     ['Order Reference', publicRequestReference],
-    ['Full Name', registration.full_name],
-    ['Email', registration.email],
-    ['Phone', registration.phone],
-    ['Domain', formattedDomain],
-    ['Order Summary', purchaseSummary],
-    ['Order Details', purchaseAction],
-    ['Product Family', productLabel],
-    !isDomainOnly && serviceTypeName ? ['Service Type', serviceTypeName] : null,
-    !isDomainOnly && packageName ? ['Package', packageName] : null,
-    ['Selection', selectionLabel],
-    ['Period', periodLabel],
-    ['Order Price', priceLabel],
-  ].filter(Boolean);
-  const subject = selectionLabel && !isDomainOnly
-    ? `New customer order - ${formattedDomain} - ${selectionLabel}`
-    : `New customer order - ${formattedDomain}`;
+    ...buildCommunicationOrderRows(registration, {
+      includePeriod: true,
+      includePrice: true,
+    }),
+  ];
+  const customerDetailRows = buildSubmittedCustomerRows(registration);
+  const subject =
+    planName && !isDomainOnly
+      ? `New customer order - ${formattedDomain} - ${planName}`
+      : `New customer order - ${formattedDomain}`;
   const text = [
     `Hello ${registrar.name},`,
     '',
     'A new customer order has been placed on the platform.',
     '',
-    'This is the request to process:',
-    ...detailRows.map(([label, value]) => `${label}: ${value}`),
+    'Order Details:',
+    ...buildDetailLines(orderDetailRows),
+    '',
+    'Customer Details:',
+    ...buildDetailLines(customerDetailRows),
     '',
     'Please action it from your registrar workflow.',
   ].join('\n');
@@ -726,15 +828,10 @@ function buildRegistrarNotificationEmail(registration, registrar) {
   const html = `
     <p>Hello ${registrar.name},</p>
     <p>A new customer order has been placed on the platform.</p>
-    <p>This is the request to process:</p>
-    <ul>
-      ${detailRows
-        .map(
-          ([label, value]) =>
-            `<li><strong>${label}:</strong> ${value}</li>`
-        )
-        .join('')}
-    </ul>
+    <p><strong>Order Details</strong></p>
+    ${buildDetailListHtml(orderDetailRows)}
+    <p><strong>Customer Details</strong></p>
+    ${buildDetailListHtml(customerDetailRows)}
     <p>Please action it from your registrar workflow.</p>
   `;
 
@@ -817,9 +914,18 @@ async function getRegistrationById(requestId) {
       reg.status,
       reg.pushed,
       reg.registrar_reference_id,
+      reg.first_name,
+      reg.last_name,
       reg.full_name,
-      reg.email,
       reg.phone,
+      reg.email,
+      reg.company_name,
+      reg.kra_pin,
+      reg.street_address,
+      reg.city,
+      reg.state,
+      reg.postcode,
+      reg.country,
       reg.domain_name,
       reg.target_service,
       reg.product_family,
@@ -854,51 +960,139 @@ async function getRegistrationById(requestId) {
   return result.rows[0];
 }
 
+function normalizeMatchValue(value) {
+  return normalizeTextValue(value).toLowerCase();
+}
+
+function matchesRequestedValue(actualValue, requestedValue) {
+  const normalizedRequestedValue = normalizeMatchValue(requestedValue);
+
+  if (!normalizedRequestedValue) {
+    return true;
+  }
+
+  return normalizeMatchValue(actualValue) === normalizedRequestedValue;
+}
+
+function matchesRequestedBillingLabel(row, requestedPeriod) {
+  const normalizedRequestedPeriod = normalizeMatchValue(requestedPeriod);
+
+  if (!normalizedRequestedPeriod) {
+    return true;
+  }
+
+  const rowBillingLabel = getBillingLabel({
+    billingCycle: row.billing_cycle,
+    billingLabel: row.billing_label,
+    billingPeriodMonths: row.billing_period_months,
+  });
+
+  return normalizeMatchValue(rowBillingLabel) === normalizedRequestedPeriod;
+}
+
+function matchesRequestedPrice(actualPrice, requestedPrice) {
+  if (requestedPrice === null || requestedPrice === undefined) {
+    return true;
+  }
+
+  return Number(actualPrice) === Number(requestedPrice);
+}
+
 async function resolveDomainSelection({
   domainName,
+  domainExtension,
   domainOfferingId,
+  period,
+  priceKsh,
   registrarId,
   selectionSnapshotJson,
 }) {
-  if (!domainOfferingId) {
+  const normalizedDomainExtension = normalizeTextValue(domainExtension).toLowerCase();
+
+  if (!domainOfferingId && !normalizedDomainExtension) {
     return null;
   }
 
-  const params = [domainOfferingId];
-  let registrarFilter = '';
+  let row = null;
 
-  if (registrarId) {
-    params.push(registrarId);
-    registrarFilter = ` AND rdo.registrar_id = $${params.length}`;
+  if (domainOfferingId) {
+    const params = [domainOfferingId];
+    let registrarFilter = '';
+
+    if (registrarId) {
+      params.push(registrarId);
+      registrarFilter = ` AND rdo.registrar_id = $${params.length}`;
+    }
+
+    const result = await pool.query(
+      `
+        SELECT
+          rdo.id AS domain_offering_id,
+          rdo.registrar_id,
+          rdo.registration_price_ksh,
+          rdo.currency_code,
+          rdo.billing_period_months,
+          de.code AS extension_code,
+          de.label AS extension_label,
+          de.extension,
+          r.registrar_code,
+          r.name AS registrar_name
+        FROM registrar_domain_offerings rdo
+        INNER JOIN domain_extensions de
+          ON de.id = rdo.domain_extension_id
+        INNER JOIN registrars r
+          ON r.id = rdo.registrar_id
+        WHERE rdo.id = $1
+          AND rdo.is_active = true
+          ${registrarFilter}
+        LIMIT 1
+      `,
+      params
+    );
+
+    row = result.rows[0] || null;
+  } else {
+    const params = [normalizedDomainExtension];
+    let registrarFilter = '';
+
+    if (registrarId) {
+      params.push(registrarId);
+      registrarFilter = ` AND rdo.registrar_id = $${params.length}`;
+    }
+
+    const result = await pool.query(
+      `
+        SELECT
+          rdo.id AS domain_offering_id,
+          rdo.registrar_id,
+          rdo.registration_price_ksh,
+          rdo.currency_code,
+          rdo.billing_period_months,
+          de.code AS extension_code,
+          de.label AS extension_label,
+          de.extension,
+          r.registrar_code,
+          r.name AS registrar_name
+        FROM registrar_domain_offerings rdo
+        INNER JOIN domain_extensions de
+          ON de.id = rdo.domain_extension_id
+        INNER JOIN registrars r
+          ON r.id = rdo.registrar_id
+        WHERE rdo.is_active = true
+          AND LOWER(de.extension) = $1
+          ${registrarFilter}
+        ORDER BY rdo.billing_period_months ASC, rdo.registration_price_ksh ASC
+      `,
+      params
+    );
+
+    row =
+      result.rows.find(
+        (candidate) =>
+          matchesRequestedBillingLabel(candidate, period) &&
+          matchesRequestedPrice(candidate.registration_price_ksh, priceKsh)
+      ) || null;
   }
-
-  const result = await pool.query(
-    `
-      SELECT
-        rdo.id AS domain_offering_id,
-        rdo.registrar_id,
-        rdo.registration_price_ksh,
-        rdo.currency_code,
-        rdo.billing_period_months,
-        de.code AS extension_code,
-        de.label AS extension_label,
-        de.extension,
-        r.registrar_code,
-        r.name AS registrar_name
-      FROM registrar_domain_offerings rdo
-      INNER JOIN domain_extensions de
-        ON de.id = rdo.domain_extension_id
-      INNER JOIN registrars r
-        ON r.id = rdo.registrar_id
-      WHERE rdo.id = $1
-        AND rdo.is_active = true
-        ${registrarFilter}
-      LIMIT 1
-    `,
-    params
-  );
-
-  const row = result.rows[0] || null;
 
   if (!row) {
     throw new Error('Selected domain option not found.');
@@ -939,15 +1133,28 @@ async function resolveDomainSelection({
 }
 
 async function resolveServiceSelection({
+  plus,
+  type,
+  packageName,
   domainExtension,
   domainName,
+  priceKsh,
+  period,
   registrarId,
   servicePackageId,
   servicePackagePriceId,
   selectionSnapshotJson,
   targetService,
 }) {
-  if (!servicePackageId && !servicePackagePriceId) {
+  const normalizedRequestedFamily = normalizeProductFamilyValue(plus || targetService);
+  const normalizedRequestedType = normalizeMatchValue(type);
+  const normalizedRequestedPackage = normalizeMatchValue(packageName);
+  const hasSummarySelection =
+    Boolean(normalizedRequestedFamily) ||
+    Boolean(normalizedRequestedType) ||
+    Boolean(normalizedRequestedPackage);
+
+  if (!servicePackageId && !servicePackagePriceId && !hasSummarySelection) {
     return null;
   }
 
@@ -962,13 +1169,20 @@ async function resolveServiceSelection({
     params.push(servicePackagePriceId);
     filters.push(`rspp.id = $${params.length}`);
   } else {
-    params.push(servicePackageId);
-    filters.push(`rsp.id = $${params.length}`);
+    if (servicePackageId) {
+      params.push(servicePackageId);
+      filters.push(`rsp.id = $${params.length}`);
+    }
   }
 
   if (registrarId) {
     params.push(registrarId);
     filters.push(`rsp.registrar_id = $${params.length}`);
+  }
+
+  if (normalizedRequestedFamily && normalizedRequestedFamily !== 'domain_registration') {
+    params.push(normalizedRequestedFamily);
+    filters.push(`sp.product_family = $${params.length}`);
   }
 
   const result = await pool.query(
@@ -1002,12 +1216,23 @@ async function resolveServiceSelection({
         ON r.id = rsp.registrar_id
       WHERE ${filters.join('\n        AND ')}
       ORDER BY rspp.is_default DESC, rspp.price_ksh ASC, rspp.billing_period_months ASC
-      LIMIT 1
+      LIMIT 200
     `,
     params
   );
 
-  const row = result.rows[0] || null;
+  const matchingRows = result.rows.filter(
+    (candidate) =>
+      (!normalizedRequestedType ||
+        matchesRequestedValue(candidate.service_name, normalizedRequestedType)) &&
+      (!normalizedRequestedPackage ||
+        matchesRequestedValue(candidate.package_name, normalizedRequestedPackage)) &&
+      matchesRequestedBillingLabel(candidate, period) &&
+      matchesRequestedPrice(candidate.price_ksh, priceKsh)
+  );
+  const row =
+    matchingRows[0] ||
+    (!hasSummarySelection ? result.rows[0] || null : null);
 
   if (!row) {
     throw new Error('Selected service package not found.');
@@ -1207,16 +1432,25 @@ function buildFallbackSelection({
 }
 
 async function resolveSelection(payload, resolvedRegistrarId) {
+  const hasServiceSummarySelection = Boolean(
+    normalizeTextValue(payload.plus) ||
+      normalizeTextValue(payload.type) ||
+      normalizeTextValue(payload.package)
+  );
   const prefersDomainSelection =
     payload.selection_kind === 'domain' ||
     (!payload.service_package_id &&
       !payload.service_package_price_id &&
-      !payload.bundle_id);
+      !payload.bundle_id &&
+      !hasServiceSummarySelection);
 
   if (prefersDomainSelection) {
     const domainSelection = await resolveDomainSelection({
       domainName: payload.domain_name,
+      domainExtension: payload.domain_extension,
       domainOfferingId: payload.domain_offering_id,
+      period: payload.period,
+      priceKsh: payload.price_ksh,
       registrarId: resolvedRegistrarId,
       selectionSnapshotJson: payload.selection_snapshot_json,
     });
@@ -1227,8 +1461,13 @@ async function resolveSelection(payload, resolvedRegistrarId) {
   }
 
   const serviceSelection = await resolveServiceSelection({
+    plus: payload.plus,
+    type: payload.type,
+    packageName: payload.package || payload.package_name,
     domainExtension: payload.domain_extension,
     domainName: payload.domain_name,
+    period: payload.period,
+    priceKsh: payload.price_ksh,
     registrarId: resolvedRegistrarId,
     selectionSnapshotJson: payload.selection_snapshot_json,
     servicePackageId: payload.service_package_id,
@@ -1252,7 +1491,15 @@ async function resolveSelection(payload, resolvedRegistrarId) {
     return bundleSelection;
   }
 
-  return buildFallbackSelection(payload);
+  if (prefersDomainSelection) {
+    throw new Error('Selected domain option not found.');
+  }
+
+  if (payload.bundle_id) {
+    throw new Error('Selected bundle not found.');
+  }
+
+  throw new Error('Selected service package not found.');
 }
 
 async function findActiveDomainOrderConflict({ domain_name, email }) {
@@ -1264,7 +1511,10 @@ async function findActiveDomainOrderConflict({ domain_name, email }) {
         status,
         pushed,
         registrar_reference_id,
+        first_name,
+        last_name,
         full_name,
+        phone,
         email,
         domain_name,
         target_service,
@@ -1300,9 +1550,18 @@ async function markSmsAcknowledged(requestId) {
 }
 
 async function insertRegistrationWithExternalReference({
-  full_name,
-  email,
+  first_name,
+  last_name,
   phone,
+  email,
+  company_name,
+  kra_pin,
+  street_address,
+  city,
+  state,
+  postcode,
+  country,
+  full_name,
   domain_name,
   target_service,
   product_family,
@@ -1325,9 +1584,18 @@ async function insertRegistrationWithExternalReference({
 }) {
   const insertQuery = `
     INSERT INTO registrations (
-      full_name,
-      email,
+      first_name,
+      last_name,
       phone,
+      email,
+      company_name,
+      kra_pin,
+      street_address,
+      city,
+      state,
+      postcode,
+      country,
+      full_name,
       domain_name,
       target_service,
       product_family,
@@ -1352,7 +1620,8 @@ async function insertRegistrationWithExternalReference({
     VALUES (
       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
       $11, $12, $13, $14, $15, $16, $17, $18,
-      $19, $20, $21, $22, $23
+      $19, $20, $21, $22, $23, $24, $25, $26,
+      $27, $28, $29, $30, $31, $32
     )
     RETURNING
       request_id,
@@ -1360,9 +1629,18 @@ async function insertRegistrationWithExternalReference({
       status,
       pushed,
       registrar_reference_id,
-      full_name,
-      email,
+      first_name,
+      last_name,
       phone,
+      email,
+      company_name,
+      kra_pin,
+      street_address,
+      city,
+      state,
+      postcode,
+      country,
+      full_name,
       domain_name,
       target_service,
       product_family,
@@ -1389,9 +1667,18 @@ async function insertRegistrationWithExternalReference({
 
     try {
       const result = await pool.query(insertQuery, [
-        full_name,
-        email,
+        first_name,
+        last_name,
         phone,
+        email,
+        company_name,
+        kra_pin,
+        street_address,
+        city,
+        state,
+        postcode,
+        country,
+        full_name,
         domain_name,
         target_service,
         product_family,
@@ -1717,10 +2004,24 @@ async function processRegistrationSideEffects(registration, registrar) {
 exports.createRegistration = async (payload) => {
   const normalizedPayload = normalizeRegistrationInput(payload);
   const {
-    full_name,
-    email,
+    first_name,
+    last_name,
     phone,
+    email,
+    company_name,
+    kra_pin,
+    street_address,
+    city,
+    state,
+    postcode,
+    country,
     domain_name,
+    plus,
+    type,
+    package: selectedPackage,
+    price_ksh,
+    period,
+    currency_code,
     target_service,
     product_family,
     domain_extension,
@@ -1735,32 +2036,67 @@ exports.createRegistration = async (payload) => {
     registrarName: registrar_name,
   });
 
-  if (!registrar && (registrar_id || registrar_code)) {
+  if (!registrar && (registrar_id || registrar_code || registrar_name)) {
     throw new Error('Registrar not found.');
   }
 
   const resolvedRegistrarId = registrar ? registrar.id : null;
   const resolvedRegistrarName = registrar ? registrar.name : registrar_name;
   const selection = await resolveSelection(normalizedPayload, resolvedRegistrarId);
+  const initialSelectionSnapshot = buildSelectionSnapshotSummary({
+    currency_code: selection.currency_code || currency_code,
+    domain_extension: selection.domain_extension || domain_extension,
+    domain_name,
+    packageName: selectedPackage || selection.package_name || normalizedPayload.package_name,
+    period:
+      period ||
+      getBillingLabel({
+        billingCycle: selection.billing_cycle,
+        billingPeriodMonths: selection.billing_period_months,
+      }),
+    plus,
+    price_ksh:
+      selection.quoted_price_ksh === null || selection.quoted_price_ksh === undefined
+        ? price_ksh
+        : selection.quoted_price_ksh,
+    registrar_name: resolvedRegistrarName,
+    type,
+  });
   const selectionContext = {
     ...selection,
     domain_name,
+    first_name,
+    last_name,
+    phone,
+    email,
+    company_name,
+    kra_pin,
+    street_address,
+    city,
+    state,
+    postcode,
+    country,
+    domain_extension: selection.domain_extension || domain_extension,
     product_family: selection.product_family || product_family,
     registrar_name: resolvedRegistrarName,
+    selection_snapshot_json: initialSelectionSnapshot,
     service_product_code: selection.service_product_code || normalizedPayload.service_product_code,
     target_service: selection.target_service || target_service,
   };
-  const purchaseCopy = buildPurchaseCopy(selectionContext);
-  const enrichedSelectionSnapshot = {
-    ...normalizeJsonObject(selection.selection_snapshot_json),
-    product_label: purchaseCopy.productLabel,
-    purchase_action: purchaseCopy.purchaseAction,
-    purchase_summary: purchaseCopy.purchaseSummary,
-    selected_offering_label: purchaseCopy.selectedOfferingLabel,
-  };
+  const resolvedSelectionSummary = buildSelectionSummary(selectionContext);
+  const enrichedSelectionSnapshot = buildSelectionSnapshotSummary({
+    currency_code: resolvedSelectionSummary.currencyCode,
+    domain_extension: resolvedSelectionSummary.domainExtension,
+    domain_name,
+    packageName: resolvedSelectionSummary.packageName,
+    period: resolvedSelectionSummary.period,
+    plus: resolvedSelectionSummary.plusService,
+    price_ksh: resolvedSelectionSummary.priceKsh,
+    registrar_name: resolvedSelectionSummary.registrarName,
+    type: resolvedSelectionSummary.serviceTypeName,
+  });
   const orderLogContext = buildOrderLogContext({
     ...selectionContext,
-    domain_extension: selection.domain_extension || domain_extension,
     selection_snapshot_json: enrichedSelectionSnapshot,
     status: 'received',
   });
@@ -1786,9 +2122,18 @@ exports.createRegistration = async (payload) => {
 
   try {
     registration = await insertRegistrationWithExternalReference({
-      full_name,
-      email,
+      first_name,
+      last_name,
       phone,
+      email,
+      company_name,
+      kra_pin,
+      street_address,
+      city,
+      state,
+      postcode,
+      country,
+      full_name: null,
       domain_name,
       target_service: selection.target_service || target_service,
       product_family: selection.product_family || product_family,
@@ -1862,7 +2207,6 @@ exports.createRegistration = async (payload) => {
       registrar && registrar.is_active && registrar.api_endpoint
         ? DELIVERY_STATUS.PENDING
         : DELIVERY_STATUS.SKIPPED,
-    registrar_code: registrar ? registrar.registrar_code : null,
   };
 };
 

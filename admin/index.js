@@ -12,34 +12,35 @@ const VIEW_LABELS = {
   logs: 'Delivery Logs',
   registrars: 'Registrars',
 };
+const REGISTRAR_DELETE_CONFIRMATION_PHRASE = 'DELETE NOW';
 
 const REGISTRAR_FORM_FIELDS = [
   {
-    description: 'The registrar name used when requests are matched and displayed across the system.',
+    description: 'Required. The registrar name used when requests are matched and displayed across the system.',
     key: 'name',
     label: 'Registrar Name',
     type: 'text',
   },
   {
-    description: 'Primary registrar contact email used for portal access and operational communication.',
+    description: 'Required. Primary registrar contact email used for portal access and operational communication.',
     key: 'primaryEmail',
     label: 'Primary Email',
     type: 'text',
   },
   {
-    description: 'Primary registrar contact phone used for portal OTP verification.',
+    description: 'Required. Primary registrar contact phone used for portal OTP verification.',
     key: 'primaryPhone',
     label: 'Primary Phone',
     type: 'text',
   },
   {
-    description: 'Optional registrar API endpoint used for automated push requests.',
+    description: 'Required. Registrar API endpoint used for automated push requests.',
     key: 'apiEndpoint',
     label: 'API Endpoint',
     type: 'text',
   },
   {
-    description: 'Optional email that receives registrar-side registration notifications.',
+    description: 'Required. Email that receives registrar-side registration notifications.',
     key: 'notificationEmail',
     label: 'Notification Email',
     type: 'text',
@@ -159,6 +160,101 @@ function formatJson(value) {
   } catch (error) {
     return String(value);
   }
+}
+
+function normalizeLookupText(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function parseRegistrationSelectionSnapshot(value) {
+  if (!value) {
+    return {};
+  }
+
+  if (typeof value === 'string') {
+    try {
+      const parsedValue = JSON.parse(value);
+      return parsedValue && typeof parsedValue === 'object' && !Array.isArray(parsedValue)
+        ? parsedValue
+        : {};
+    } catch (_error) {
+      return {};
+    }
+  }
+
+  return typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function humanizeLookupLabel(value) {
+  const normalizedValue = normalizeLookupText(value)
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+
+  if (!normalizedValue) {
+    return '';
+  }
+
+  return normalizedValue
+    .split(' ')
+    .map((token) => {
+      if (token === 'wordpress') {
+        return 'WordPress';
+      }
+
+      if (token === 'api') {
+        return 'API';
+      }
+
+      if (token === 'sms') {
+        return 'SMS';
+      }
+
+      if (token === 'kyc') {
+        return 'KYC';
+      }
+
+      return `${token.charAt(0).toUpperCase()}${token.slice(1)}`;
+    })
+    .join(' ');
+}
+
+function buildRegistrationSelectionSummary(registration) {
+  const snapshot = parseRegistrationSelectionSnapshot(
+    registration && registration.selection_snapshot_json
+  );
+  const selectionKind = normalizeLookupText(registration.selection_kind).toLowerCase();
+  const targetService = normalizeLookupText(registration.target_service).toLowerCase();
+  const productFamily = normalizeLookupText(registration.product_family).toLowerCase();
+  const snapshotPrice =
+    snapshot.price_ksh === null || snapshot.price_ksh === undefined || snapshot.price_ksh === ''
+      ? null
+      : Number(snapshot.price_ksh);
+  const isDomainOnly =
+    selectionKind === 'domain' ||
+    targetService === 'domain_registration_only' ||
+    targetService === 'domain_registration' ||
+    productFamily === 'domain_registration';
+
+  return {
+    domainExtension:
+      normalizeLookupText(snapshot.domain_extension) ||
+      normalizeLookupText(registration.domain_extension),
+    package:
+      normalizeLookupText(snapshot.package) ||
+      normalizeLookupText(registration.package_name),
+    period:
+      normalizeLookupText(snapshot.period) ||
+      formatBillingLabel(registration.billing_cycle, registration.billing_period_months),
+    plus:
+      normalizeLookupText(snapshot.plus) ||
+      (!isDomainOnly ? humanizeLookupLabel(productFamily || targetService) : ''),
+    priceKsh: Number.isFinite(snapshotPrice) ? snapshotPrice : registration.quoted_price_ksh,
+    registrarName:
+      normalizeLookupText(snapshot.registrar_name) ||
+      normalizeLookupText(registration.registrar_name),
+    type: normalizeLookupText(snapshot.type),
+  };
 }
 
 function createDomainOfferingDraft(existingOffer = null) {
@@ -310,7 +406,13 @@ function formatRegistrarDraftValue(field, draft) {
   }
 
   const value = draft[field.key];
-  return value ? String(value) : 'Not set';
+  return value ? String(value) : 'Required';
+}
+
+function getMissingRegistrarDraftFields(draft) {
+  return REGISTRAR_FORM_FIELDS.filter((field) => field.type !== 'boolean')
+    .filter((field) => !String(draft[field.key] || '').trim())
+    .map((field) => field.label);
 }
 
 function formatLookupDeliveryActivity(log) {
@@ -332,8 +434,72 @@ function formatLookupFailedPushAttempt(attempt) {
   ].join('\n');
 }
 
+function buildEmailDeliveryNote(emailDelivery, label = 'Credential email') {
+  if (!emailDelivery) {
+    return null;
+  }
+
+  if (emailDelivery.status === 'sent') {
+    return `${label} sent to ${emailDelivery.destination}.`;
+  }
+
+  if (emailDelivery.status === 'failed') {
+    return `${label} failed: ${emailDelivery.reason || 'Unknown error.'}`;
+  }
+
+  if (emailDelivery.status === 'skipped') {
+    if (emailDelivery.reason === 'missing_primary_email') {
+      return `${label} skipped because no registrar primary email is set.`;
+    }
+
+    if (emailDelivery.reason === 'email_service_not_configured') {
+      return `${label} skipped because the email service is not configured.`;
+    }
+
+    return `${label} skipped.`;
+  }
+
+  return `${label} status: ${emailDelivery.status}.`;
+}
+
+function buildRegistrarDeletionImpactLines(impact) {
+  if (!impact || !impact.registrar || !impact.summary) {
+    return ['Registrar deletion impact could not be loaded.'];
+  }
+
+  const registrar = impact.registrar;
+  const summary = impact.summary;
+
+  return [
+    `Registrar: ${registrar.name} (${toDisplay(registrar.registrar_code)})`,
+    '',
+    'This action is permanent and irreversible.',
+    'A deletion snapshot will be written to registrar_deletion_audit before the live registrar is removed.',
+    '',
+    'Live data that will be deleted:',
+    `- Registrar profile and access metadata`,
+    `- Domain offers: ${toDisplay(summary.domain_offering_count)}`,
+    `- Registrar-owned service products: ${toDisplay(summary.service_product_count)}`,
+    `- Service offerings: ${toDisplay(summary.service_offering_count)}`,
+    `- Service packages: ${toDisplay(summary.service_package_count)}`,
+    `- Package prices: ${toDisplay(summary.service_package_price_count)}`,
+    `- Bundles: ${toDisplay(summary.bundle_count)}`,
+    `- Bundle items: ${toDisplay(summary.bundle_item_count)}`,
+    `- API keys: ${toDisplay(summary.api_key_count)}`,
+    `- Auth challenges: ${toDisplay(summary.auth_challenge_count)}`,
+    `- Portal sessions: ${toDisplay(summary.portal_session_count)}`,
+    `- Domain updater audit events: ${toDisplay(summary.audit_event_count)}`,
+    `- Enabled product families: ${toDisplay(summary.enabled_family_count)}`,
+    '',
+    'Historical records that will be preserved but detached from this registrar:',
+    `- Registrations: ${toDisplay(summary.linked_registration_count)} linked, ${toDisplay(summary.processed_registration_count)} processed`,
+    `- Registrar requests: ${toDisplay(summary.linked_request_count)}`,
+  ];
+}
+
 function buildRegistrationLookupContent(lookup) {
   const registration = lookup.registration;
+  const selectionSummary = buildRegistrationSelectionSummary(registration);
   const deliveryTimeline = lookup.deliveryLogs.length
     ? lookup.deliveryLogs.map(formatLookupDeliveryActivity).join('\n\n ')
     : 'No delivery activity recorded yet.';
@@ -355,22 +521,35 @@ function buildRegistrationLookupContent(lookup) {
     ` Updated At: ${formatDateTime(registration.updated_at)}`,
     '',
     ' Customer',
-    ` Full Name: ${registration.full_name}`,
-    ` Email: ${toDisplay(registration.email)}`,
+    ` First Name: ${toDisplay(registration.first_name)}`,
+    ` Last Name: ${toDisplay(registration.last_name)}`,
     ` Phone: ${toDisplay(registration.phone)}`,
+    ` Email: ${toDisplay(registration.email)}`,
+    ` Company Name: ${toDisplay(registration.company_name)}`,
+    ` KRA PIN: ${toDisplay(registration.kra_pin)}`,
+    ` Street Address: ${toDisplay(registration.street_address)}`,
+    ` City: ${toDisplay(registration.city)}`,
+    ` State: ${toDisplay(registration.state)}`,
+    ` Post Code: ${toDisplay(registration.postcode)}`,
+    ` Country: ${toDisplay(registration.country)}`,
     '',
-    ' Domain And Registrar',
+    ' Order Summary',
     ` Domain: ${registration.domain_name}`,
-    ` Domain Extension: ${toDisplay(registration.domain_extension)}`,
-    ` Target Service: ${toDisplay(registration.target_service)}`,
-    ` Product Family: ${toDisplay(registration.product_family)}`,
-    ` Selection Kind: ${toDisplay(registration.selection_kind)}`,
-    ` Package Name: ${toDisplay(registration.package_name)}`,
-    ` Package Code: ${toDisplay(registration.package_code)}`,
-    ` Billing: ${formatBillingLabel(registration.billing_cycle, registration.billing_period_months)}`,
-    ` Quoted Price: ${formatCurrencyKsh(registration.quoted_price_ksh)}`,
-    ` Chosen Registrar: ${toDisplay(registration.registrar_name)}`,
-    ` Registrar Code: ${toDisplay(registration.registrar_code)}`,
+    ` Domain Extension: ${toDisplay(selectionSummary.domainExtension)}`,
+    ...(selectionSummary.plus
+      ? [` Plus: ${toDisplay(selectionSummary.plus)}`]
+      : []),
+    ...(selectionSummary.type
+      ? [` Type: ${toDisplay(selectionSummary.type)}`]
+      : []),
+    ...(selectionSummary.package
+      ? [` Package: ${toDisplay(selectionSummary.package)}`]
+      : []),
+    ` Period: ${toDisplay(selectionSummary.period)}`,
+    ` Price: ${formatCurrencyKsh(selectionSummary.priceKsh)}`,
+    '',
+    ' Registrar',
+    ` Chosen Registrar: ${toDisplay(selectionSummary.registrarName)}`,
     ` Registrar Active: ${registration.registrar_is_active == null ? 'Unknown' : formatBoolean(registration.registrar_is_active)}`,
     ` Registrar Notification Email: ${toDisplay(registration.registrar_notification_email)}`,
     ` Registrar API Endpoint: ${toDisplay(registration.registrar_api_endpoint)}`,
@@ -420,7 +599,9 @@ class AdminApp {
     };
 
     this.busy = false;
+    this.interactionLayers = [];
     this.modalActive = false;
+    this.nextInteractionLayerId = 0;
     this.exiting = false;
   }
 
@@ -597,7 +778,7 @@ class AdminApp {
     this.screen.key(['C-c'], () => this.exit(0));
 
     this.screen.on('keypress', async (ch, key) => {
-      if (this.modalActive) {
+      if (this.hasActiveInteractionLayer()) {
         return;
       }
 
@@ -664,6 +845,11 @@ class AdminApp {
 
         if (ch === 't') {
           await this.toggleSelectedRegistrar();
+          return;
+        }
+
+        if (ch === 'D') {
+          await this.deleteSelectedRegistrar();
         }
       }
 
@@ -703,6 +889,190 @@ class AdminApp {
     this.updateStatusBar();
   }
 
+  openInteractionLayer() {
+    const layerId = `layer_${++this.nextInteractionLayerId}`;
+    this.interactionLayers.push(layerId);
+    this.modalActive = true;
+    return layerId;
+  }
+
+  closeInteractionLayer(layerId) {
+    const layerIndex = this.interactionLayers.lastIndexOf(layerId);
+
+    if (layerIndex >= 0) {
+      this.interactionLayers.splice(layerIndex, 1);
+    }
+
+    this.modalActive = this.interactionLayers.length > 0;
+  }
+
+  hasActiveInteractionLayer() {
+    return this.interactionLayers.length > 0;
+  }
+
+  isTopInteractionLayer(layerId) {
+    return this.interactionLayers[this.interactionLayers.length - 1] === layerId;
+  }
+
+  bindInteractionKey(widget, keys, layerId, handler) {
+    widget.key(keys, (...args) => {
+      if (!this.isTopInteractionLayer(layerId)) {
+        return;
+      }
+
+      return handler(...args);
+    });
+  }
+
+  openWorkflowProgressModal({ title, summary, steps }) {
+    const app = this;
+    const layerId = this.openInteractionLayer();
+    const stepState = steps.map((label) => ({
+      detail: '',
+      label,
+      status: 'pending',
+    }));
+
+    const modal = blessed.box({
+      parent: this.screen,
+      top: 'center',
+      left: 'center',
+      width: '74%',
+      height: Math.max(16, stepState.length * 2 + 10),
+      border: 'line',
+      label: ` ${title} `,
+      style: {
+        bg: 'black',
+        fg: 'white',
+        border: {
+          fg: 'cyan',
+        },
+      },
+    });
+
+    const summaryBox = blessed.box({
+      parent: modal,
+      top: 1,
+      left: 2,
+      right: 2,
+      height: 3,
+      content: summary,
+      style: {
+        fg: 'white',
+      },
+    });
+
+    const stepsBox = blessed.box({
+      parent: modal,
+      top: 5,
+      left: 2,
+      right: 2,
+      bottom: 2,
+      scrollable: true,
+      style: {
+        fg: 'white',
+      },
+    });
+
+    const footer = blessed.box({
+      parent: modal,
+      left: 2,
+      right: 2,
+      bottom: 0,
+      height: 1,
+      content: ' Operation in progress. Please wait...',
+      style: {
+        fg: 'yellow',
+      },
+    });
+
+    let closable = false;
+    let closed = false;
+
+    const renderSteps = () => {
+      const lines = [];
+
+      stepState.forEach((step) => {
+        const statusToken =
+          step.status === 'success'
+            ? '[OK]'
+            : step.status === 'warning'
+            ? '[!]'
+            : step.status === 'error'
+            ? '[X]'
+            : step.status === 'running'
+            ? '[~]'
+            : '[ ]';
+
+        lines.push(`${statusToken} ${step.label}`);
+
+        if (step.detail) {
+          lines.push(`    ${step.detail}`);
+        }
+
+        lines.push('');
+      });
+
+      stepsBox.setContent(lines.join('\n').trimEnd());
+      this.screen.render();
+    };
+
+    const close = () => {
+      if (closed || !closable || !this.isTopInteractionLayer(layerId)) {
+        return;
+      }
+
+      closed = true;
+      modal.detach();
+      this.screen.restoreFocus();
+      this.closeInteractionLayer(layerId);
+      this.screen.render();
+    };
+
+    this.bindInteractionKey(modal, ['enter', 'escape', 'x'], layerId, () => close());
+
+    this.screen.saveFocus();
+    modal.focus();
+    renderSteps();
+    this.screen.render();
+
+    const updateStep = (index, status, detail) => {
+      if (!stepState[index]) {
+        return;
+      }
+
+      stepState[index].status = status;
+      stepState[index].detail = detail || '';
+      renderSteps();
+    };
+
+    return {
+      close,
+      completeStep(index, detail) {
+        updateStep(index, 'success', detail);
+      },
+      failStep(index, detail) {
+        updateStep(index, 'error', detail);
+      },
+      setClosable(message = ' Press Enter, Escape, or x to close.') {
+        closable = true;
+        footer.setContent(message);
+        footer.style.fg = 'green';
+        app.screen.render();
+      },
+      setSummary(message) {
+        summaryBox.setContent(message);
+        app.screen.render();
+      },
+      startStep(index, detail) {
+        updateStep(index, 'running', detail);
+      },
+      warnStep(index, detail) {
+        updateStep(index, 'warning', detail);
+      },
+    };
+  }
+
   rememberVisiblePortalKey(keyResult) {
     if (!keyResult || !keyResult.registrar || !keyResult.registrar.id || !keyResult.apiKey) {
       return;
@@ -739,7 +1109,7 @@ class AdminApp {
       dashboard: `${common} | s search reference`,
       failed: `${common} | r retry selected | R retry all`,
       logs: `${common} | arrows move`,
-      registrars: `${common} | a add | e edit | k rotate portal key | o domain offers | p packages | t toggle active`,
+      registrars: `${common} | a add | e edit | k new API key | o domain offers | p packages | t toggle active | D delete`,
     };
 
     this.helpBar.setContent(` ${viewHelp[this.state.view]}`);
@@ -1030,7 +1400,7 @@ class AdminApp {
           ` Primary Phone: ${toDisplay(registrar.primary_phone)}`,
           ` Notification Email: ${toDisplay(registrar.notification_email)}`,
           ` API Endpoint: ${toDisplay(registrar.api_endpoint)}`,
-          ` Portal Keys: ${toDisplay(registrar.active_api_key_count)}/${toDisplay(registrar.api_key_count)} active`,
+          ` API Keys: ${toDisplay(registrar.active_api_key_count)}/${toDisplay(registrar.api_key_count)} active`,
           ` Latest Key Prefix: ${toDisplay(registrar.latest_api_key_prefix)}`,
           ` Latest Key Status: ${toDisplay(registrar.latest_api_key_status)}`,
           ` Latest Key Expires: ${formatDateTime(registrar.latest_api_key_expires_at)}`,
@@ -1042,12 +1412,13 @@ class AdminApp {
           ` Key Storage: ${registrar.latest_api_key_prefix ? 'Stored hashed for verification.' : 'No key issued yet.'}`,
           ` Key Secret Scope: ${
             visiblePortalKey
-              ? 'Visible in this admin session after generation/rotation.'
+              ? 'Visible in this admin session after API key generation.'
               : 'Raw secret is not recoverable after generation.'
           }`,
           ` Total Requests: ${registrar.total_requests}`,
           ` Processed Requests: ${registrar.processed_requests}`,
           ` Domain Offers: ${registrar.domain_extension_count}`,
+          ` Service Offerings: ${toDisplay(registrar.service_offering_count)}`,
           ` Service Packages: ${toDisplay(registrar.service_package_count)}`,
           ` Package Prices: ${toDisplay(registrar.service_package_price_count)}`,
           ` Bundles: ${registrar.bundle_count}`,
@@ -1057,10 +1428,11 @@ class AdminApp {
           ' Actions:',
           '  a  Add registrar',
           '  e  Open registrar editor',
-          '  k  Rotate the primary portal API key',
+          '  k  Generate a new registrar API key',
           '  o  Manage domain offers and pricing',
           '  p  Manage packages and pricing',
           '  t  Toggle active / inactive',
+          '  D  Delete and unboard registrar',
         ].join('\n')
       );
     };
@@ -1088,6 +1460,9 @@ class AdminApp {
     });
     list.key(['t'], async () => {
       await this.toggleSelectedRegistrar();
+    });
+    list.key(['D'], async () => {
+      await this.deleteSelectedRegistrar();
     });
 
     if (registrars.length) {
@@ -1182,7 +1557,8 @@ class AdminApp {
           ` Public Reference: ${toDisplay(failedPush.external_request_id)}`,
           ` Domain: ${failedPush.domain_name}`,
           ` Registrar: ${failedPush.registrar_name}`,
-          ` Customer: ${failedPush.full_name}`,
+          ` First Name: ${toDisplay(failedPush.first_name)}`,
+          ` Last Name: ${toDisplay(failedPush.last_name)}`,
           ` Email: ${toDisplay(failedPush.email)}`,
           ` Phone: ${toDisplay(failedPush.phone)}`,
           ` Registration Created: ${formatDateTime(failedPush.created_at)}`,
@@ -1362,7 +1738,7 @@ class AdminApp {
   }
 
   async askConfirmation(question) {
-    this.modalActive = true;
+    const layerId = this.openInteractionLayer();
 
     try {
       return await new Promise((resolve, reject) => {
@@ -1376,7 +1752,7 @@ class AdminApp {
         });
       });
     } finally {
-      this.modalActive = false;
+      this.closeInteractionLayer(layerId);
       this.screen.render();
     }
   }
@@ -1403,6 +1779,7 @@ class AdminApp {
 
   async openExternalReferenceLookupPrompt() {
     return new Promise((resolve) => {
+      const layerId = this.openInteractionLayer();
       const modal = blessed.box({
         parent: this.screen,
         top: 'center',
@@ -1476,6 +1853,7 @@ class AdminApp {
       input.readInput((error, result) => {
         modal.detach();
         this.screen.restoreFocus();
+        this.closeInteractionLayer(layerId);
         this.screen.render();
 
         if (error || result === null) {
@@ -1490,6 +1868,7 @@ class AdminApp {
 
   async openRegistrationLookupResult(lookup) {
     return new Promise((resolve) => {
+      const layerId = this.openInteractionLayer();
       const reference = lookup.registration.external_request_id || 'Lookup Result';
       const modal = blessed.box({
         parent: this.screen,
@@ -1546,17 +1925,132 @@ class AdminApp {
       const close = () => {
         modal.detach();
         this.screen.restoreFocus();
+        this.closeInteractionLayer(layerId);
         this.screen.render();
         resolve();
       };
 
-      modal.key(['escape', 'x'], () => close());
-      details.key(['escape', 'x'], () => close());
+      this.bindInteractionKey(modal, ['escape', 'x'], layerId, () => close());
+      this.bindInteractionKey(details, ['escape', 'x'], layerId, () => close());
 
       this.screen.saveFocus();
       details.focus();
       details.setScroll(0);
       this.screen.render();
+    });
+  }
+
+  async openDangerPhrasePrompt({ title, lines, phrase }) {
+    const contentLines = Array.isArray(lines) ? lines : [String(lines || '')];
+
+    return new Promise((resolve) => {
+      const layerId = this.openInteractionLayer();
+      const modal = blessed.box({
+        parent: this.screen,
+        top: 'center',
+        left: 'center',
+        width: '86%',
+        height: '80%',
+        border: 'line',
+        label: ` ${title} `,
+        style: {
+          bg: 'black',
+          fg: 'white',
+          border: {
+            fg: 'red',
+          },
+        },
+      });
+
+      const details = blessed.box({
+        parent: modal,
+        top: 1,
+        left: 2,
+        right: 2,
+        height: '68%',
+        scrollable: true,
+        alwaysScroll: true,
+        keys: true,
+        mouse: true,
+        vi: true,
+        scrollbar: {
+          ch: ' ',
+          style: {
+            bg: 'red',
+          },
+        },
+        content: contentLines.join('\n'),
+        style: {
+          fg: 'white',
+        },
+      });
+
+      blessed.box({
+        parent: modal,
+        top: '71%',
+        left: 2,
+        right: 2,
+        height: 2,
+        content: `Type ${phrase} to continue. Press Esc to cancel.`,
+        style: {
+          fg: 'yellow',
+        },
+      });
+
+      const input = blessed.textbox({
+        parent: modal,
+        top: '77%',
+        left: 2,
+        right: 2,
+        height: 3,
+        inputOnFocus: false,
+        keys: true,
+        mouse: true,
+        border: 'line',
+        value: '',
+        style: {
+          bg: 'white',
+          fg: 'black',
+          border: {
+            fg: 'red',
+          },
+          focus: {
+            bg: 'white',
+            fg: 'black',
+          },
+        },
+      });
+
+      blessed.box({
+        parent: modal,
+        bottom: 0,
+        left: 2,
+        right: 2,
+        height: 1,
+        content: ' Type the phrase in the white box. Press Enter to confirm or Esc to cancel.',
+        style: {
+          fg: 'green',
+        },
+      });
+
+      this.screen.saveFocus();
+      input.focus();
+      input.setValue('');
+      this.screen.render();
+
+      input.readInput((error, result) => {
+        modal.detach();
+        this.screen.restoreFocus();
+        this.closeInteractionLayer(layerId);
+        this.screen.render();
+
+        if (error || result === null) {
+          resolve(null);
+          return;
+        }
+
+        resolve(String(result || '').trim());
+      });
     });
   }
 
@@ -1620,6 +2114,7 @@ class AdminApp {
     const isMultiline = field.multiline === true;
 
     return new Promise((resolve) => {
+      const layerId = this.openInteractionLayer();
       const modal = blessed.box({
         parent: this.screen,
         top: 'center',
@@ -1712,7 +2207,7 @@ class AdminApp {
       this.screen.render();
 
       if (isMultiline) {
-        input.key(['C-s'], () => {
+        this.bindInteractionKey(input, ['C-s'], layerId, () => {
           if (typeof input._done === 'function') {
             input._done(null, input.getValue());
           }
@@ -1725,6 +2220,7 @@ class AdminApp {
         }
         modal.detach();
         this.screen.restoreFocus();
+        this.closeInteractionLayer(layerId);
         this.screen.render();
 
         if (error || result === null) {
@@ -1739,6 +2235,7 @@ class AdminApp {
 
   async openBooleanFieldEditor(field, currentValue) {
     return new Promise((resolve) => {
+      const layerId = this.openInteractionLayer();
       const labels = getBooleanFieldLabels(field);
       const modal = blessed.box({
         parent: this.screen,
@@ -1809,12 +2306,14 @@ class AdminApp {
       const done = (value) => {
         modal.detach();
         this.screen.restoreFocus();
+        this.closeInteractionLayer(layerId);
         this.screen.render();
         resolve(value);
       };
 
-      modal.key(['escape', 'x'], () => done(null));
-      list.key(['enter'], () => {
+      this.bindInteractionKey(modal, ['escape', 'x'], layerId, () => done(null));
+      this.bindInteractionKey(list, ['escape', 'x'], layerId, () => done(null));
+      this.bindInteractionKey(list, ['enter'], layerId, () => {
         const selected = options[list.selected] || options[0];
         done(selected.value);
       });
@@ -1855,6 +2354,7 @@ class AdminApp {
     }
 
     return new Promise((resolve) => {
+      const layerId = this.openInteractionLayer();
       const modal = blessed.box({
         parent: this.screen,
         top: 'center',
@@ -1949,13 +2449,14 @@ class AdminApp {
       const done = (value) => {
         modal.detach();
         this.screen.restoreFocus();
+        this.closeInteractionLayer(layerId);
         this.screen.render();
         resolve(value);
       };
 
-      modal.key(['escape', 'x'], () => done(null));
-      list.key(['escape', 'x'], () => done(null));
-      list.key(['enter'], () => {
+      this.bindInteractionKey(modal, ['escape', 'x'], layerId, () => done(null));
+      this.bindInteractionKey(list, ['escape', 'x'], layerId, () => done(null));
+      this.bindInteractionKey(list, ['enter'], layerId, () => {
         const option = options[list.selected] || options[0];
         done(option.value);
       });
@@ -1985,6 +2486,7 @@ class AdminApp {
     buildPreviewLines,
   }) {
     return new Promise((resolve) => {
+      const layerId = this.openInteractionLayer();
       const modal = blessed.box({
         parent: this.screen,
         top: 'center',
@@ -2067,6 +2569,7 @@ class AdminApp {
       const cleanup = (value) => {
         modal.detach();
         this.screen.restoreFocus();
+        this.closeInteractionLayer(layerId);
         this.screen.render();
         resolve(value);
       };
@@ -2138,11 +2641,11 @@ class AdminApp {
         this.screen.render();
       };
 
-      modal.key(['escape', 'x'], () => cleanup(null));
-      modal.key(['s'], () => cleanup({ ...draft }));
-      fieldList.key(['escape', 'x'], () => cleanup(null));
-      fieldList.key(['s'], () => cleanup({ ...draft }));
-      fieldList.key(['enter'], async () => {
+      this.bindInteractionKey(modal, ['escape', 'x'], layerId, () => cleanup(null));
+      this.bindInteractionKey(modal, ['s'], layerId, () => cleanup({ ...draft }));
+      this.bindInteractionKey(fieldList, ['escape', 'x'], layerId, () => cleanup(null));
+      this.bindInteractionKey(fieldList, ['s'], layerId, () => cleanup({ ...draft }));
+      this.bindInteractionKey(fieldList, ['enter'], layerId, async () => {
         await editSelectedField();
       });
 
@@ -2170,6 +2673,7 @@ class AdminApp {
         : ' Add Registrar ';
 
       const result = await new Promise((resolve) => {
+        const layerId = this.openInteractionLayer();
         const modal = blessed.box({
           parent: this.screen,
           top: 'center',
@@ -2252,6 +2756,7 @@ class AdminApp {
         const cleanup = (value) => {
           modal.detach();
           this.screen.restoreFocus();
+          this.closeInteractionLayer(layerId);
           this.screen.render();
           resolve(value);
         };
@@ -2280,14 +2785,15 @@ class AdminApp {
               ' Editing Flow:',
               '  1. Move to the field you want.',
               '  2. Press Enter to edit only that field.',
-              '  3. Press s when the full registrar draft looks right.',
+              '  3. Complete every registrar profile field before saving.',
+              '  4. Press s when the full registrar draft looks right.',
               '',
               ' Draft Preview:',
-              `  Name: ${draft.name || 'Not set'}`,
-              `  Primary Email: ${draft.primaryEmail || 'Not set'}`,
-              `  Primary Phone: ${draft.primaryPhone || 'Not set'}`,
-              `  API Endpoint: ${draft.apiEndpoint || 'Not set'}`,
-              `  Notification Email: ${draft.notificationEmail || 'Not set'}`,
+              `  Name: ${draft.name || 'Required'}`,
+              `  Primary Email: ${draft.primaryEmail || 'Required'}`,
+              `  Primary Phone: ${draft.primaryPhone || 'Required'}`,
+              `  API Endpoint: ${draft.apiEndpoint || 'Required'}`,
+              `  Notification Email: ${draft.notificationEmail || 'Required'}`,
               `  Active: ${draft.isActive ? 'Active' : 'Inactive'}`,
             ].join('\n')
           );
@@ -2324,11 +2830,11 @@ class AdminApp {
           this.screen.render();
         };
 
-        modal.key(['escape', 'x'], () => cleanup(null));
-        modal.key(['s'], () => cleanup({ ...draft }));
-        fieldList.key(['escape', 'x'], () => cleanup(null));
-        fieldList.key(['s'], () => cleanup({ ...draft }));
-        fieldList.key(['enter'], async () => {
+        this.bindInteractionKey(modal, ['escape', 'x'], layerId, () => cleanup(null));
+        this.bindInteractionKey(modal, ['s'], layerId, () => cleanup({ ...draft }));
+        this.bindInteractionKey(fieldList, ['escape', 'x'], layerId, () => cleanup(null));
+        this.bindInteractionKey(fieldList, ['s'], layerId, () => cleanup({ ...draft }));
+        this.bindInteractionKey(fieldList, ['enter'], layerId, async () => {
           await editSelectedField();
         });
 
@@ -2358,61 +2864,121 @@ class AdminApp {
         primaryPhone: result.primaryPhone,
         notificationEmail: result.notificationEmail,
       };
+      const missingRegistrarFields = getMissingRegistrarDraftFields(payload);
 
-      const creationResult = await this.withLoading(
-        existingRegistrar ? 'Updating registrar...' : 'Creating registrar...',
-        async () => {
-          let onboarding = null;
-          let emailDelivery = null;
+      if (missingRegistrarFields.length) {
+        this.setStatus(
+          `Complete all registrar profile fields before saving. Missing: ${missingRegistrarFields.join(', ')}.`,
+          'warning'
+        );
+        return;
+      }
 
-          if (existingRegistrar) {
-            await adminService.updateRegistrar(existingRegistrar.id, payload);
-            this.setStatus(`Registrar "${payload.name}" updated successfully.`, 'success');
-            return null;
-          } else {
-            const created = await adminService.createRegistrar(payload);
-            onboarding = created && created.onboarding ? created.onboarding : null;
-            emailDelivery = onboarding ? onboarding.emailDelivery : null;
-            let statusMessage = `Registrar "${payload.name}" created successfully.`;
+      let creationResult = null;
 
-            if (emailDelivery && emailDelivery.status === 'sent') {
-              statusMessage += ` Onboarding email sent to ${emailDelivery.destination}.`;
-            } else if (emailDelivery && emailDelivery.status === 'failed') {
-              statusMessage += ` Onboarding email failed: ${emailDelivery.reason}.`;
-            } else if (emailDelivery && emailDelivery.status === 'skipped') {
-              statusMessage += ' Onboarding email was skipped.';
-            }
-
-            this.setStatus(
-              statusMessage,
-              emailDelivery && emailDelivery.status === 'failed' ? 'warning' : 'success'
-            );
-          }
-
+      if (existingRegistrar) {
+        await this.withLoading('Updating registrar...', async () => {
+          await adminService.updateRegistrar(existingRegistrar.id, payload);
           this.state.view = 'registrars';
           this.updateChrome();
           this.state.registrars = await adminService.listRegistrars();
           this.renderView();
+          this.setStatus(`Registrar "${payload.name}" updated successfully.`, 'success');
+        });
+      } else {
+        const progress = this.openWorkflowProgressModal({
+          title: 'Registrar Onboarding',
+          summary: `Onboarding ${payload.name}. The admin interface will create the registrar workspace, send the onboarding email, and refresh the management view.`,
+          steps: [
+            'Onboard registrar workspace',
+            'Send onboarding email',
+            'Refresh registrar management view',
+          ],
+        });
 
-          return existingRegistrar
-            ? null
-            : {
-                onboarding: onboarding
-                  ? {
-                      ...onboarding,
-                      note:
-                        emailDelivery && emailDelivery.status === 'sent'
-                          ? `Onboarding email sent to ${emailDelivery.destination}.`
-                          : emailDelivery && emailDelivery.status === 'failed'
-                          ? `Onboarding email failed: ${emailDelivery.reason}`
-                          : emailDelivery && emailDelivery.status === 'skipped'
-                          ? 'Onboarding email skipped. Share this key securely.'
-                          : null,
-                    }
-                  : null,
-              };
+        let activeStepIndex = 0;
+
+        try {
+          progress.startStep(0, `Creating registrar ${payload.name} and issuing the first API key...`);
+
+          const created = await adminService.createRegistrar(payload, {
+            sendCredentialEmail: false,
+          });
+
+          creationResult = created && created.onboarding ? created : null;
+
+          if (!creationResult || !creationResult.onboarding || !creationResult.onboarding.apiKey) {
+            throw new Error('Registrar onboarding completed without returning the new API key.');
+          }
+
+          progress.completeStep(
+            0,
+            `Registrar ${payload.name} is ready with API key prefix ${toDisplay(creationResult.onboarding.keyPrefix)}.`
+          );
+
+          activeStepIndex = 1;
+          progress.startStep(
+            1,
+            `Sending the onboarding email to ${payload.primaryEmail}...`
+          );
+
+          const emailDelivery = await adminService.sendRegistrarPortalCredentialEmail(
+            creationResult.registrar.id,
+            creationResult.onboarding.apiKey,
+            { emailType: 'onboarding' }
+          );
+          const onboardingEmailNote =
+            buildEmailDeliveryNote(emailDelivery, 'Onboarding email') ||
+            'Onboarding email delivery completed.';
+
+          creationResult.onboarding = {
+            ...creationResult.onboarding,
+            emailDelivery,
+            note: onboardingEmailNote,
+          };
+
+          if (emailDelivery && emailDelivery.status === 'sent') {
+            progress.completeStep(1, onboardingEmailNote);
+          } else {
+            progress.warnStep(1, onboardingEmailNote);
+          }
+
+          activeStepIndex = 2;
+          progress.startStep(2, 'Refreshing registrar summaries and reopening the registrars view...');
+          this.state.view = 'registrars';
+          this.updateChrome();
+          this.state.registrars = await adminService.listRegistrars();
+          this.renderView();
+          progress.completeStep(
+            2,
+            `Registrar ${payload.name} now appears in the registrar management interface.`
+          );
+          progress.setSummary(`Registrar ${payload.name} was onboarded successfully.`);
+          progress.setClosable();
+          progress.close();
+
+          const statusNote = buildEmailDeliveryNote(
+            creationResult.onboarding.emailDelivery,
+            'Onboarding email'
+          );
+          const statusTone =
+            creationResult.onboarding.emailDelivery &&
+            creationResult.onboarding.emailDelivery.status === 'sent'
+              ? 'success'
+              : 'warning';
+
+          this.setStatus(
+            `Registrar "${payload.name}" created successfully.${statusNote ? ` ${statusNote}` : ''}`,
+            statusTone
+          );
+        } catch (error) {
+          progress.failStep(activeStepIndex, error.message);
+          progress.setSummary(`Registrar onboarding stopped: ${error.message}`);
+          progress.setClosable();
+          progress.close();
+          throw error;
         }
-      );
+      }
 
       if (creationResult && creationResult.onboarding && creationResult.onboarding.apiKey) {
         this.rememberVisiblePortalKey(creationResult.onboarding);
@@ -2708,6 +3274,7 @@ class AdminApp {
       let changed = false;
 
       const managerResult = await new Promise((resolve) => {
+        const layerId = this.openInteractionLayer();
         const modal = blessed.box({
           parent: this.screen,
           top: 'center',
@@ -2863,6 +3430,7 @@ class AdminApp {
         const close = () => {
           modal.detach();
           this.screen.restoreFocus();
+          this.closeInteractionLayer(layerId);
           this.screen.render();
           resolve({ changed });
         };
@@ -2972,17 +3540,17 @@ class AdminApp {
           this.screen.render();
         };
 
-        modal.key(['escape', 'x'], () => close());
-        detailsPanel.key(['escape', 'x'], () => close());
-        list.key(['escape', 'x'], () => close());
-        modal.key(['a'], async () => editOffer(null));
-        list.key(['a'], async () => editOffer(null));
-        modal.key(['e'], async () => editOffer(getSelectedOffer()));
-        list.key(['e'], async () => editOffer(getSelectedOffer()));
-        modal.key(['t'], async () => toggleOffer());
-        list.key(['t'], async () => toggleOffer());
-        modal.key(['r'], async () => refreshOfferings());
-        list.key(['r'], async () => refreshOfferings());
+        this.bindInteractionKey(modal, ['escape', 'x'], layerId, () => close());
+        this.bindInteractionKey(detailsPanel, ['escape', 'x'], layerId, () => close());
+        this.bindInteractionKey(list, ['escape', 'x'], layerId, () => close());
+        this.bindInteractionKey(modal, ['a'], layerId, async () => editOffer(null));
+        this.bindInteractionKey(list, ['a'], layerId, async () => editOffer(null));
+        this.bindInteractionKey(modal, ['e'], layerId, async () => editOffer(getSelectedOffer()));
+        this.bindInteractionKey(list, ['e'], layerId, async () => editOffer(getSelectedOffer()));
+        this.bindInteractionKey(modal, ['t'], layerId, async () => toggleOffer());
+        this.bindInteractionKey(list, ['t'], layerId, async () => toggleOffer());
+        this.bindInteractionKey(modal, ['r'], layerId, async () => refreshOfferings());
+        this.bindInteractionKey(list, ['r'], layerId, async () => refreshOfferings());
 
         list.on('select item', (_, index) => {
           renderDetails(index);
@@ -3025,6 +3593,7 @@ class AdminApp {
     let changed = false;
 
     return new Promise((resolve) => {
+      const layerId = this.openInteractionLayer();
       const modal = blessed.box({
         parent: this.screen,
         top: 'center',
@@ -3190,6 +3759,7 @@ class AdminApp {
       const close = () => {
         modal.detach();
         this.screen.restoreFocus();
+        this.closeInteractionLayer(layerId);
         this.screen.render();
         resolve({ changed });
       };
@@ -3346,19 +3916,19 @@ class AdminApp {
         this.screen.render();
       };
 
-      modal.key(['escape', 'x'], () => close());
-      detailsPanel.key(['escape', 'x'], () => close());
-      list.key(['escape', 'x'], () => close());
-      modal.key(['a'], async () => editPrice(null));
-      list.key(['a'], async () => editPrice(null));
-      modal.key(['D'], async () => deletePrice());
-      list.key(['D'], async () => deletePrice());
-      modal.key(['e'], async () => editPrice(getSelectedPrice()));
-      list.key(['e'], async () => editPrice(getSelectedPrice()));
-      modal.key(['t'], async () => togglePrice());
-      list.key(['t'], async () => togglePrice());
-      modal.key(['r'], async () => refreshPrices());
-      list.key(['r'], async () => refreshPrices());
+      this.bindInteractionKey(modal, ['escape', 'x'], layerId, () => close());
+      this.bindInteractionKey(detailsPanel, ['escape', 'x'], layerId, () => close());
+      this.bindInteractionKey(list, ['escape', 'x'], layerId, () => close());
+      this.bindInteractionKey(modal, ['a'], layerId, async () => editPrice(null));
+      this.bindInteractionKey(list, ['a'], layerId, async () => editPrice(null));
+      this.bindInteractionKey(modal, ['D'], layerId, async () => deletePrice());
+      this.bindInteractionKey(list, ['D'], layerId, async () => deletePrice());
+      this.bindInteractionKey(modal, ['e'], layerId, async () => editPrice(getSelectedPrice()));
+      this.bindInteractionKey(list, ['e'], layerId, async () => editPrice(getSelectedPrice()));
+      this.bindInteractionKey(modal, ['t'], layerId, async () => togglePrice());
+      this.bindInteractionKey(list, ['t'], layerId, async () => togglePrice());
+      this.bindInteractionKey(modal, ['r'], layerId, async () => refreshPrices());
+      this.bindInteractionKey(list, ['r'], layerId, async () => refreshPrices());
 
       list.on('select item', (_, index) => {
         renderDetails(index);
@@ -3403,6 +3973,7 @@ class AdminApp {
       let changed = false;
 
       const managerResult = await new Promise((resolve) => {
+        const layerId = this.openInteractionLayer();
         const modal = blessed.box({
           parent: this.screen,
           top: 'center',
@@ -3575,6 +4146,7 @@ class AdminApp {
         const close = () => {
           modal.detach();
           this.screen.restoreFocus();
+          this.closeInteractionLayer(layerId);
           this.screen.render();
           resolve({ changed });
         };
@@ -3747,21 +4319,21 @@ class AdminApp {
           }
         };
 
-        modal.key(['escape', 'x'], () => close());
-        detailsPanel.key(['escape', 'x'], () => close());
-        list.key(['escape', 'x'], () => close());
-        modal.key(['a'], async () => editPackage(null));
-        list.key(['a'], async () => editPackage(null));
-        modal.key(['d'], async () => deletePackage());
-        list.key(['d'], async () => deletePackage());
-        modal.key(['e'], async () => editPackage(getSelectedPackage()));
-        list.key(['e'], async () => editPackage(getSelectedPackage()));
-        modal.key(['v'], async () => managePrices());
-        list.key(['v'], async () => managePrices());
-        modal.key(['t'], async () => togglePackage());
-        list.key(['t'], async () => togglePackage());
-        modal.key(['r'], async () => refreshPackages());
-        list.key(['r'], async () => refreshPackages());
+        this.bindInteractionKey(modal, ['escape', 'x'], layerId, () => close());
+        this.bindInteractionKey(detailsPanel, ['escape', 'x'], layerId, () => close());
+        this.bindInteractionKey(list, ['escape', 'x'], layerId, () => close());
+        this.bindInteractionKey(modal, ['a'], layerId, async () => editPackage(null));
+        this.bindInteractionKey(list, ['a'], layerId, async () => editPackage(null));
+        this.bindInteractionKey(modal, ['d'], layerId, async () => deletePackage());
+        this.bindInteractionKey(list, ['d'], layerId, async () => deletePackage());
+        this.bindInteractionKey(modal, ['e'], layerId, async () => editPackage(getSelectedPackage()));
+        this.bindInteractionKey(list, ['e'], layerId, async () => editPackage(getSelectedPackage()));
+        this.bindInteractionKey(modal, ['v'], layerId, async () => managePrices());
+        this.bindInteractionKey(list, ['v'], layerId, async () => managePrices());
+        this.bindInteractionKey(modal, ['t'], layerId, async () => togglePackage());
+        this.bindInteractionKey(list, ['t'], layerId, async () => togglePackage());
+        this.bindInteractionKey(modal, ['r'], layerId, async () => refreshPackages());
+        this.bindInteractionKey(list, ['r'], layerId, async () => refreshPackages());
 
         list.on('select item', (_, index) => {
           renderDetails(index);
@@ -3801,9 +4373,8 @@ class AdminApp {
   }
 
   async showPortalKeyModal(keyResult) {
-    this.modalActive = true;
-
     return new Promise((resolve) => {
+      const layerId = this.openInteractionLayer();
       const infoLines = [
         `Registrar: ${keyResult.registrar.name} (${keyResult.registrar.registrarCode})`,
         `Label: ${keyResult.keyLabel}`,
@@ -3811,6 +4382,10 @@ class AdminApp {
         `Expires: ${formatDateTime(keyResult.expiresAt)}`,
         'Store this full key now. It will not be shown again after you close this dialog.',
       ];
+
+      if (keyResult.portalAccessUrl) {
+        infoLines.push(`Portal URL: ${keyResult.portalAccessUrl}`);
+      }
 
       if (keyResult.note) {
         infoLines.push(keyResult.note);
@@ -3820,14 +4395,18 @@ class AdminApp {
         infoLines.push(`Previous active keys revoked: ${keyResult.rotatedCount}`);
       }
 
+      const infoHeight = infoLines.length + 1;
+      const keyTop = infoHeight + 1;
+      const modalHeight = Math.max(15, keyTop + 6);
+
       const modal = blessed.box({
         parent: this.screen,
         top: 'center',
         left: 'center',
         width: '72%',
-        height: keyResult.note ? 17 : 15,
+        height: modalHeight,
         border: 'line',
-        label: ' Primary Portal API Key ',
+        label: ' Registrar API Key ',
         keys: true,
         mouse: true,
         style: {
@@ -3844,7 +4423,7 @@ class AdminApp {
         top: 1,
         left: 2,
         right: 2,
-        height: infoLines.length + 1,
+        height: infoHeight,
         content: infoLines.join('\n'),
         style: {
           fg: 'white',
@@ -3853,7 +4432,7 @@ class AdminApp {
 
       blessed.box({
         parent: modal,
-        top: keyResult.note ? 8 : 6,
+        top: keyTop,
         left: 2,
         right: 2,
         height: 3,
@@ -3887,12 +4466,14 @@ class AdminApp {
 
       const close = () => {
         modal.detach();
-        this.modalActive = false;
+        this.screen.restoreFocus();
+        this.closeInteractionLayer(layerId);
         this.screen.render();
         resolve();
       };
 
-      modal.key(['enter', 'escape', 'x'], () => close());
+      this.bindInteractionKey(modal, ['enter', 'escape', 'x'], layerId, () => close());
+      this.screen.saveFocus();
       modal.focus();
       this.screen.render();
     });
@@ -3906,31 +4487,212 @@ class AdminApp {
       return;
     }
 
+    let activeStepIndex = 0;
+    let progress = null;
+
+    try {
       const confirmed = await this.askConfirmation(
-      `Rotate the primary portal API key for "${registrar.name}"?`
-    );
+        `Generate a new registrar API key for "${registrar.name}"?`
+      );
 
-    if (!confirmed) {
-      this.setStatus('Portal key rotation cancelled.', 'warning');
-      return;
-    }
+      if (!confirmed) {
+        this.setStatus('API key generation cancelled.', 'warning');
+        return;
+      }
 
-    const keyResult = await this.withLoading('Rotating primary portal API key...', async () => {
-      const createdKey = await adminService.createRegistrarPortalApiKey(registrar.id);
+      progress = this.openWorkflowProgressModal({
+        title: 'Generate Registrar API Key',
+        summary: `Generating a new API key for ${registrar.name}. The previous active key will be revoked and the registrar will receive the replacement key by email.`,
+        steps: [
+          'Generate a new registrar API key',
+          'Send registrar API key email',
+          'Refresh registrar management view',
+        ],
+      });
+      let keyResult = null;
+
+      progress.startStep(0, `Issuing a replacement API key for ${registrar.name}...`);
+      keyResult = await adminService.createRegistrarPortalApiKey(registrar.id, {
+        credentialEmailType: 'reissue',
+        sendCredentialEmail: false,
+      });
+
+      if (!keyResult || !keyResult.apiKey) {
+        throw new Error('The new registrar API key could not be created.');
+      }
+
+      progress.completeStep(
+        0,
+        `New API key ready with prefix ${toDisplay(keyResult.keyPrefix)}.`
+      );
+
+      activeStepIndex = 1;
+      progress.startStep(1, `Sending the new API key to ${toDisplay(registrar.primary_email)}...`);
+      const emailDelivery = await adminService.sendRegistrarPortalCredentialEmail(
+        registrar.id,
+        keyResult.apiKey,
+        { emailType: 'reissue' }
+      );
+      const emailNote =
+        buildEmailDeliveryNote(emailDelivery, 'Registrar API key email') ||
+        'Registrar API key email delivery completed.';
+
+      keyResult = {
+        ...keyResult,
+        emailDelivery,
+        note: emailNote,
+      };
+
+      if (emailDelivery && emailDelivery.status === 'sent') {
+        progress.completeStep(1, emailNote);
+      } else {
+        progress.warnStep(1, emailNote);
+      }
+
+      activeStepIndex = 2;
+      progress.startStep(2, 'Refreshing registrar summaries and key details...');
       await this.refreshRegistrarsState();
       this.renderView();
-      return createdKey;
-    });
+      progress.completeStep(
+        2,
+        `Registrar ${registrar.name} now shows the latest API key metadata in the management view.`
+      );
+      progress.setSummary(`A new registrar API key is ready for ${registrar.name}.`);
+      progress.setClosable();
+      progress.close();
+      progress = null;
 
-    if (!keyResult) {
+      if (!keyResult) {
+        return;
+      }
+
+      this.rememberVisiblePortalKey(keyResult);
+      this.renderView();
+      this.screen.render();
+      await this.showPortalKeyModal(keyResult);
+      this.setStatus(
+        `Generated a new API key for "${registrar.name}".${keyResult.note ? ` ${keyResult.note}` : ''}`,
+        keyResult.emailDelivery && keyResult.emailDelivery.status === 'sent'
+          ? 'success'
+          : 'warning'
+      );
+    } catch (error) {
+      if (progress) {
+        progress.failStep(activeStepIndex, error.message);
+        progress.setSummary(`API key generation stopped: ${error.message}`);
+        progress.setClosable();
+        progress.close();
+      }
+      this.setStatus(error.message, 'error');
+    }
+  }
+
+  async deleteSelectedRegistrar() {
+    const registrar = this.getSelectedRegistrar();
+
+    if (!registrar) {
+      this.setStatus('Select a registrar first.', 'warning');
       return;
     }
 
-    this.rememberVisiblePortalKey(keyResult);
-    this.renderView();
-    this.screen.render();
-    await this.showPortalKeyModal(keyResult);
-    this.setStatus(`Rotated the primary portal API key for "${registrar.name}".`, 'success');
+    try {
+      const impact = await this.withLoading(
+        `Inspecting deletion impact for ${registrar.name}...`,
+        async () => adminService.getRegistrarDeletionImpact(registrar.id)
+      );
+
+      if (!impact) {
+        return;
+      }
+
+      const typedPhrase = await this.openDangerPhrasePrompt({
+        title: `Delete Registrar: ${registrar.name}`,
+        lines: buildRegistrarDeletionImpactLines(impact),
+        phrase: REGISTRAR_DELETE_CONFIRMATION_PHRASE,
+      });
+
+      if (!typedPhrase) {
+        this.setStatus('Registrar deletion cancelled.', 'warning');
+        return;
+      }
+
+      if (typedPhrase.trim().toUpperCase() !== REGISTRAR_DELETE_CONFIRMATION_PHRASE) {
+        this.setStatus(
+          `Registrar deletion cancelled. Type ${REGISTRAR_DELETE_CONFIRMATION_PHRASE} to continue.`,
+          'warning'
+        );
+        return;
+      }
+
+      const progress = this.openWorkflowProgressModal({
+        title: 'Delete Registrar',
+        summary: `Deleting ${registrar.name}. The system will archive the registrar snapshot first, then remove the live registrar and refresh the management view.`,
+        steps: [
+          'Archive registrar deletion snapshot',
+          'Delete live registrar records',
+          'Refresh registrar management view',
+        ],
+      });
+
+      let deletionResult = null;
+      let activeStepIndex = 0;
+
+      try {
+        progress.startStep(
+          0,
+          'Writing the registrar profile and catalog snapshot to registrar_deletion_audit...'
+        );
+
+        deletionResult = await adminService.deleteRegistrar(registrar.id, {
+          actorId: 'admin',
+          actorType: 'checkout_admin_tui',
+          confirmationPhrase: typedPhrase,
+        });
+
+        progress.completeStep(
+          0,
+          `Snapshot archived under ${deletionResult.archiveId}.`
+        );
+
+        activeStepIndex = 1;
+        progress.startStep(
+          1,
+          'Deleting the live registrar profile, catalog records, and portal access data...'
+        );
+        progress.completeStep(
+          1,
+          `Registrar ${registrar.name} and its live catalog and access records were removed.`
+        );
+
+        activeStepIndex = 2;
+        progress.startStep(2, 'Refreshing the registrar management view...');
+        await this.refreshRegistrarsState();
+        delete this.state.visiblePortalKeys[registrar.id];
+        this.renderView();
+        progress.completeStep(
+          2,
+          'Registrar management view refreshed successfully.'
+        );
+        progress.setSummary(
+          `Registrar ${registrar.name} was deleted. Historical registrations and registrar requests were preserved but detached from the deleted registrar.`
+        );
+        progress.setClosable();
+        progress.close();
+
+        this.setStatus(
+          `Deleted registrar "${registrar.name}". Archive ${deletionResult.archiveId} was stored before removal.`,
+          'success'
+        );
+      } catch (error) {
+        progress.failStep(activeStepIndex, error.message);
+        progress.setSummary(`Registrar deletion stopped: ${error.message}`);
+        progress.setClosable();
+        progress.close();
+        throw error;
+      }
+    } catch (error) {
+      this.setStatus(error.message, 'error');
+    }
   }
 
   async toggleSelectedRegistrar() {

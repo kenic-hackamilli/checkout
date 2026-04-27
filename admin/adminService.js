@@ -11,6 +11,7 @@ const {
 } = require('../utils/validation');
 
 const LIVE_REGISTRAR_CONSOLE_URL = 'https://apps.kenic.or.ke/console/';
+const REGISTRAR_DELETION_CONFIRMATION_PHRASE = 'DELETE NOW';
 
 function normalizeString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -19,6 +20,15 @@ function normalizeString(value) {
 function normalizeNullableString(value) {
   const normalized = normalizeString(value);
   return normalized || null;
+}
+
+function normalizeEmail(value) {
+  const normalized = normalizeString(value).toLowerCase();
+  return normalized || null;
+}
+
+function normalizePhoneForComparison(value) {
+  return normalizeString(value).replace(/[^0-9+]/g, '');
 }
 
 function isValidEmail(value) {
@@ -37,7 +47,13 @@ function slugify(value) {
     .slice(0, 120);
 }
 
-function normalizeIntegerValue(value, { fieldLabel, defaultValue = null, min = 0 } = {}) {
+const MAX_CATALOG_PRICE_KSH = 50000;
+const MAX_BILLING_PERIOD_MONTHS = 24;
+
+function normalizeIntegerValue(
+  value,
+  { fieldLabel, defaultValue = null, min = 0, max = null } = {}
+) {
   if (value === null || value === undefined || value === '') {
     return defaultValue;
   }
@@ -50,6 +66,10 @@ function normalizeIntegerValue(value, { fieldLabel, defaultValue = null, min = 0
 
   if (normalizedNumber < min) {
     throw new Error(`${fieldLabel} must be ${min} or greater.`);
+  }
+
+  if (max !== null && normalizedNumber > max) {
+    throw new Error(`${fieldLabel} must be ${max} or less.`);
   }
 
   return normalizedNumber;
@@ -86,40 +106,73 @@ function buildPortalAccessUrl() {
   return normalizedUrl.endsWith('/') ? normalizedUrl : `${normalizedUrl}/`;
 }
 
-function buildRegistrarOnboardingEmail({ registrar, apiKey }) {
+function buildRegistrarPortalCredentialEmail({
+  registrar,
+  apiKey,
+  emailType = 'onboarding',
+}) {
   const consoleUrl = buildPortalAccessUrl();
-  const subject = `${registrar.name} console workspace is ready`;
+  const isReissue = normalizeString(emailType).toLowerCase() === 'reissue';
+  const subject = isReissue
+    ? `${registrar.name} new console API key`
+    : `${registrar.name} console workspace is ready`;
+  const headline = isReissue
+    ? 'A new API key has been generated for your console workspace.'
+    : 'Your console workspace is ready.';
+  const subheading = isReissue
+    ? 'Use this new key the next time you sign in.'
+    : 'You have been onboarded successfully.';
+  const credentialLead = isReissue
+    ? 'Here is your new API key for the console workspace:'
+    : 'Use this API key to log in to your console workspace:';
+  const rotationNote = isReissue
+    ? 'Your previous active API key has been replaced.'
+    : null;
+  const closingLine = isReissue
+    ? 'If you did not expect this new API key, contact the checkout admin team immediately.'
+    : 'If you believe this message reached you in error, contact the checkout admin team immediately.';
   const textLines = [
     `Hello ${registrar.name},`,
     '',
-    'Your console workspace is ready.',
-    'You have been onboarded successfully.',
+    headline,
+    subheading,
     '',
-    'Use this API key to log in to your console workspace:',
+    credentialLead,
     apiKey,
     '',
-    'This credential is private and confidential. Store it securely and do not share it outside your registrar team.',
-    'When you enter this key in the console workspace, a one-time password will be sent automatically to your registered email and/or phone number.',
   ];
+
+  if (rotationNote) {
+    textLines.push(rotationNote, '');
+  }
+
+  textLines.push(
+    'This credential is private and confidential. Store it securely and do not share it outside your registrar team.',
+    'When you enter this key in the console workspace, a one-time password will be sent automatically to your registered email and/or phone number.'
+  );
 
   if (consoleUrl) {
     textLines.push('', `Console workspace URL: ${consoleUrl}`);
   }
 
-  textLines.push(
-    '',
-    'If you believe this message reached you in error, contact the checkout admin team immediately.'
-  );
+  textLines.push('', closingLine);
 
   const htmlSections = [
     `<p>Hello ${registrar.name},</p>`,
-    '<p><strong>Your console workspace is ready.</strong></p>',
-    '<p>You have been onboarded successfully.</p>',
-    '<p>Use this API key to log in to your console workspace:</p>',
+    `<p><strong>${headline}</strong></p>`,
+    `<p>${subheading}</p>`,
+    `<p>${credentialLead}</p>`,
     `<p style="font-size:18px;font-weight:700;letter-spacing:0.06em;padding:14px 18px;border-radius:12px;background:#eef3ff;color:#10203d;display:inline-block;">${apiKey}</p>`,
-    '<p><strong>Private and confidential:</strong> store this credential securely and do not share it outside your registrar team.</p>',
-    '<p>When you enter this key in the console workspace, a one-time password will be sent automatically to your registered email and/or phone number.</p>',
   ];
+
+  if (rotationNote) {
+    htmlSections.push(`<p>${rotationNote}</p>`);
+  }
+
+  htmlSections.push(
+    '<p><strong>Private and confidential:</strong> store this credential securely and do not share it outside your registrar team.</p>',
+    '<p>When you enter this key in the console workspace, a one-time password will be sent automatically to your registered email and/or phone number.</p>'
+  );
 
   if (consoleUrl) {
     htmlSections.push(
@@ -127,9 +180,7 @@ function buildRegistrarOnboardingEmail({ registrar, apiKey }) {
     );
   }
 
-  htmlSections.push(
-    '<p>If you believe this message reached you in error, contact the checkout admin team immediately.</p>'
-  );
+  htmlSections.push(`<p>${closingLine}</p>`);
 
   return {
     html: htmlSections.join(''),
@@ -138,7 +189,11 @@ function buildRegistrarOnboardingEmail({ registrar, apiKey }) {
   };
 }
 
-async function sendRegistrarOnboardingEmail({ registrar, apiKey }) {
+async function deliverRegistrarPortalCredentialEmail({
+  registrar,
+  apiKey,
+  emailType = 'onboarding',
+}) {
   if (!registrar || !registrar.primary_email) {
     return {
       reason: 'missing_primary_email',
@@ -154,7 +209,11 @@ async function sendRegistrarOnboardingEmail({ registrar, apiKey }) {
     };
   }
 
-  const emailContent = buildRegistrarOnboardingEmail({ registrar, apiKey });
+  const emailContent = buildRegistrarPortalCredentialEmail({
+    apiKey,
+    emailType,
+    registrar,
+  });
 
   try {
     const delivery = await sendEmail({
@@ -181,9 +240,9 @@ function normalizeRegistrarInput(payload = {}) {
   return {
     name: normalizeString(payload.name),
     apiEndpoint: normalizeNullableString(payload.apiEndpoint),
-    primaryEmail: normalizeNullableString(payload.primaryEmail),
+    primaryEmail: normalizeEmail(payload.primaryEmail),
     primaryPhone: normalizeNullableString(payload.primaryPhone),
-    notificationEmail: normalizeNullableString(payload.notificationEmail),
+    notificationEmail: normalizeEmail(payload.notificationEmail),
     isActive: payload.isActive !== false,
   };
 }
@@ -209,19 +268,25 @@ function validateRegistrarInput(payload) {
     throw new Error('Registrar primary phone must be a valid phone number.');
   }
 
-  if (payload.apiEndpoint) {
-    try {
-      const parsed = new URL(payload.apiEndpoint);
-
-      if (!['http:', 'https:'].includes(parsed.protocol)) {
-        throw new Error('Registrar API endpoint must start with http:// or https://.');
-      }
-    } catch (error) {
-      throw new Error('Registrar API endpoint must be a valid URL.');
-    }
+  if (!payload.apiEndpoint) {
+    throw new Error('Registrar API endpoint is required.');
   }
 
-  if (payload.notificationEmail && !isValidEmail(payload.notificationEmail)) {
+  try {
+    const parsed = new URL(payload.apiEndpoint);
+
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      throw new Error('Registrar API endpoint must start with http:// or https://.');
+    }
+  } catch (error) {
+    throw new Error('Registrar API endpoint must be a valid URL.');
+  }
+
+  if (!payload.notificationEmail) {
+    throw new Error('Registrar notification email is required.');
+  }
+
+  if (!isValidEmail(payload.notificationEmail)) {
     throw new Error('Registrar notification email must be a valid email address.');
   }
 }
@@ -231,17 +296,20 @@ function normalizeDomainOfferingInput(payload = {}) {
     defaultValue: 12,
     fieldLabel: 'Billing period months',
     min: 1,
+    max: MAX_BILLING_PERIOD_MONTHS,
   });
 
   const registrationPriceKsh = normalizeIntegerValue(payload.registrationPriceKsh, {
     fieldLabel: 'Registration price',
     min: 0,
+    max: MAX_CATALOG_PRICE_KSH,
   });
 
   const renewalPriceKsh = normalizeIntegerValue(payload.renewalPriceKsh, {
     defaultValue: registrationPriceKsh,
     fieldLabel: 'Renewal price',
     min: 0,
+    max: MAX_CATALOG_PRICE_KSH,
   });
 
   return {
@@ -255,6 +323,7 @@ function normalizeDomainOfferingInput(payload = {}) {
       defaultValue: null,
       fieldLabel: 'Transfer price',
       min: 0,
+      max: MAX_CATALOG_PRICE_KSH,
     }),
   };
 }
@@ -278,6 +347,7 @@ function normalizeServiceOfferingInput(payload = {}, serviceProduct = null) {
     defaultValue: 1,
     fieldLabel: 'Billing period months',
     min: 1,
+    max: MAX_BILLING_PERIOD_MONTHS,
   });
   const billingCycleInput = normalizeString(payload.billingCycle).toLowerCase();
   const normalizedBillingCycle = ['monthly', 'yearly', 'custom'].includes(billingCycleInput)
@@ -298,6 +368,7 @@ function normalizeServiceOfferingInput(payload = {}, serviceProduct = null) {
     priceKsh: normalizeIntegerValue(payload.priceKsh, {
       fieldLabel: 'Plan price',
       min: 0,
+      max: MAX_CATALOG_PRICE_KSH,
     }),
     serviceProductId: normalizeString(payload.serviceProductId),
   };
@@ -378,13 +449,13 @@ function normalizeTextListValue(value) {
 }
 
 function normalizeServicePackageInput(payload = {}, serviceProduct = null) {
-  const packageName = normalizeString(payload.packageName);
+  const packageName = normalizeNullableString(payload.packageName);
   const serviceCode = serviceProduct
     ? serviceProduct.service_code
     : normalizeString(payload.serviceCode);
   const packageCode =
     normalizeString(payload.packageCode) ||
-    slugify(`${serviceCode || 'service'}_${packageName || 'package'}`);
+    slugify(`${serviceCode || 'service'}_${packageName || 'base'}`);
 
   return {
     detailsJson: normalizeJsonObjectValue(payload.detailsJson, {
@@ -411,10 +482,6 @@ function validateServicePackageInput(payload) {
     throw new Error('Choose a service first.');
   }
 
-  if (!payload.packageName) {
-    throw new Error('Package name is required.');
-  }
-
   if (!payload.packageCode) {
     throw new Error('Package code could not be generated.');
   }
@@ -425,6 +492,7 @@ function normalizeServicePackagePriceInput(payload = {}) {
     defaultValue: 1,
     fieldLabel: 'Billing period months',
     min: 1,
+    max: MAX_BILLING_PERIOD_MONTHS,
   });
   const billingCycleInput = normalizeString(payload.billingCycle).toLowerCase();
   const normalizedBillingCycle = ['monthly', 'yearly', 'custom'].includes(billingCycleInput)
@@ -444,11 +512,13 @@ function normalizeServicePackagePriceInput(payload = {}) {
     priceKsh: normalizeIntegerValue(payload.priceKsh, {
       fieldLabel: 'Package price',
       min: 0,
+      max: MAX_CATALOG_PRICE_KSH,
     }),
     setupFeeKsh: normalizeIntegerValue(payload.setupFeeKsh, {
       defaultValue: 0,
       fieldLabel: 'Setup fee',
       min: 0,
+      max: MAX_CATALOG_PRICE_KSH,
     }),
   };
 }
@@ -716,11 +786,580 @@ async function getRegistrarById(registrarId) {
   return result.rows[0] || null;
 }
 
+async function getRegistrarDeletionImpactRecord(client, registrarId, options = {}) {
+  const registrarResult = await client.query(
+    `
+      SELECT
+        id,
+        registrar_code,
+        name,
+        primary_email,
+        primary_phone,
+        notification_email,
+        api_endpoint,
+        is_active,
+        created_at,
+        updated_at
+      FROM registrars
+      WHERE id = $1
+      LIMIT 1
+      ${options.forUpdate ? 'FOR UPDATE' : ''}
+    `,
+    [registrarId]
+  );
+
+  const registrar = registrarResult.rows[0] || null;
+
+  if (!registrar) {
+    return null;
+  }
+
+  const summaryResult = await client.query(
+    `
+      SELECT
+        (
+          SELECT COUNT(*)::int
+          FROM registrar_domain_offerings
+          WHERE registrar_id = $1
+        ) AS domain_offering_count,
+        (
+          SELECT COUNT(*)::int
+          FROM service_products
+          WHERE registrar_id = $1
+        ) AS service_product_count,
+        (
+          SELECT COUNT(*)::int
+          FROM registrar_service_offerings
+          WHERE registrar_id = $1
+        ) AS service_offering_count,
+        (
+          SELECT COUNT(*)::int
+          FROM registrar_service_packages
+          WHERE registrar_id = $1
+        ) AS service_package_count,
+        (
+          SELECT COUNT(*)::int
+          FROM registrar_service_package_prices rspp
+          INNER JOIN registrar_service_packages rsp
+            ON rsp.id = rspp.service_package_id
+          WHERE rsp.registrar_id = $1
+        ) AS service_package_price_count,
+        (
+          SELECT COUNT(*)::int
+          FROM bundle_templates
+          WHERE registrar_id = $1
+        ) AS bundle_count,
+        (
+          SELECT COUNT(*)::int
+          FROM bundle_items bi
+          INNER JOIN bundle_templates bt
+            ON bt.id = bi.bundle_id
+          WHERE bt.registrar_id = $1
+        ) AS bundle_item_count,
+        (
+          SELECT COUNT(*)::int
+          FROM domain_updater.registrar_api_keys
+          WHERE registrar_id = $1
+        ) AS api_key_count,
+        (
+          SELECT COUNT(*)::int
+          FROM domain_updater.auth_challenges
+          WHERE registrar_id = $1
+        ) AS auth_challenge_count,
+        (
+          SELECT COUNT(*)::int
+          FROM domain_updater.portal_sessions
+          WHERE registrar_id = $1
+        ) AS portal_session_count,
+        (
+          SELECT COUNT(*)::int
+          FROM domain_updater.audit_events
+          WHERE registrar_id = $1
+        ) AS audit_event_count,
+        (
+          SELECT COUNT(*)::int
+          FROM domain_updater.registrar_enabled_families
+          WHERE registrar_id = $1
+        ) AS enabled_family_count,
+        (
+          SELECT COUNT(*)::int
+          FROM registrations
+          WHERE registrar_id = $1
+        ) AS linked_registration_count,
+        (
+          SELECT (COUNT(*) FILTER (WHERE pushed = true))::int
+          FROM registrations
+          WHERE registrar_id = $1
+        ) AS processed_registration_count,
+        (
+          SELECT COUNT(*)::int
+          FROM registrar_requests
+          WHERE registrar_id = $1
+        ) AS linked_request_count
+    `,
+    [registrarId]
+  );
+
+  return {
+    registrar,
+    summary: summaryResult.rows[0],
+  };
+}
+
+async function getRegistrarDeletionImpact(registrarId) {
+  const client = await pool.connect();
+
+  try {
+    return await getRegistrarDeletionImpactRecord(client, registrarId);
+  } finally {
+    client.release();
+  }
+}
+
+async function buildRegistrarDeletionSnapshot(client, registrarId) {
+  const impact = await getRegistrarDeletionImpactRecord(client, registrarId, {
+    forUpdate: true,
+  });
+
+  if (!impact) {
+    return null;
+  }
+
+  const domainOfferingsResult = await client.query(
+    `
+      SELECT
+        rdo.id,
+        rdo.domain_extension_id,
+        de.code AS extension_code,
+        de.label AS extension_label,
+        de.extension,
+        de.category_key,
+        rdo.registration_price_ksh,
+        rdo.renewal_price_ksh,
+        rdo.transfer_price_ksh,
+        rdo.setup_fee_ksh,
+        rdo.currency_code,
+        rdo.billing_period_months,
+        rdo.is_active,
+        rdo.created_at,
+        rdo.updated_at
+      FROM registrar_domain_offerings rdo
+      INNER JOIN domain_extensions de
+        ON de.id = rdo.domain_extension_id
+      WHERE rdo.registrar_id = $1
+      ORDER BY de.sort_order ASC, LOWER(de.label) ASC, rdo.billing_period_months ASC
+    `,
+    [registrarId]
+  );
+
+  const serviceProductsResult = await client.query(
+    `
+      SELECT
+        id,
+        service_code,
+        product_family,
+        name,
+        service_category,
+        description,
+        is_active,
+        created_at,
+        updated_at
+      FROM service_products
+      WHERE registrar_id = $1
+      ORDER BY LOWER(product_family) ASC, LOWER(name) ASC
+    `,
+    [registrarId]
+  );
+
+  const serviceOfferingsResult = await client.query(
+    `
+      SELECT
+        rso.id,
+        rso.service_product_id,
+        sp.service_code,
+        sp.product_family,
+        sp.name AS service_name,
+        sp.service_category,
+        rso.plan_code,
+        rso.plan_name,
+        rso.billing_cycle,
+        rso.billing_period_months,
+        rso.price_ksh,
+        rso.setup_fee_ksh,
+        rso.currency_code,
+        rso.features_json,
+        rso.is_active,
+        rso.created_at,
+        rso.updated_at
+      FROM registrar_service_offerings rso
+      INNER JOIN service_products sp
+        ON sp.id = rso.service_product_id
+      WHERE rso.registrar_id = $1
+      ORDER BY LOWER(sp.product_family) ASC, LOWER(sp.name) ASC, LOWER(rso.plan_name) ASC
+    `,
+    [registrarId]
+  );
+
+  const servicePackagesResult = await client.query(
+    `
+      SELECT
+        rsp.id,
+        rsp.service_product_id,
+        sp.service_code,
+        sp.product_family,
+        sp.name AS service_name,
+        sp.service_category,
+        rsp.package_code,
+        rsp.package_name,
+        rsp.short_description,
+        rsp.details_json,
+        rsp.feature_bullets_json,
+        rsp.display_order,
+        rsp.is_active,
+        rsp.created_at,
+        rsp.updated_at
+      FROM registrar_service_packages rsp
+      INNER JOIN service_products sp
+        ON sp.id = rsp.service_product_id
+      WHERE rsp.registrar_id = $1
+      ORDER BY LOWER(sp.product_family) ASC, LOWER(sp.name) ASC, rsp.display_order ASC
+    `,
+    [registrarId]
+  );
+
+  const servicePackagePricesResult = await client.query(
+    `
+      SELECT
+        rspp.id,
+        rspp.service_package_id,
+        rsp.package_code,
+        rsp.package_name,
+        rsp.service_product_id,
+        sp.service_code,
+        sp.product_family,
+        sp.name AS service_name,
+        sp.service_category,
+        rspp.billing_cycle,
+        rspp.billing_period_months,
+        rspp.billing_label,
+        rspp.price_ksh,
+        rspp.setup_fee_ksh,
+        rspp.currency_code,
+        rspp.is_default,
+        rspp.is_active,
+        rspp.created_at,
+        rspp.updated_at
+      FROM registrar_service_package_prices rspp
+      INNER JOIN registrar_service_packages rsp
+        ON rsp.id = rspp.service_package_id
+      INNER JOIN service_products sp
+        ON sp.id = rsp.service_product_id
+      WHERE rsp.registrar_id = $1
+      ORDER BY LOWER(sp.product_family) ASC, LOWER(rsp.package_name) ASC, rspp.billing_period_months ASC
+    `,
+    [registrarId]
+  );
+
+  const bundleTemplatesResult = await client.query(
+    `
+      SELECT
+        bt.id,
+        bt.bundle_code,
+        bt.bundle_name,
+        bt.description,
+        bt.price_ksh,
+        bt.currency_code,
+        bt.is_active,
+        bt.created_at,
+        bt.updated_at,
+        COALESCE(
+          jsonb_agg(
+            jsonb_build_object(
+              'id', bi.id,
+              'itemType', bi.item_type,
+              'domainExtensionId', bi.domain_extension_id,
+              'serviceOfferingId', bi.service_offering_id,
+              'displayName', bi.display_name,
+              'quantity', bi.quantity,
+              'sortOrder', bi.sort_order,
+              'createdAt', bi.created_at,
+              'updatedAt', bi.updated_at
+            )
+            ORDER BY bi.sort_order ASC, bi.created_at ASC
+          ) FILTER (WHERE bi.id IS NOT NULL),
+          '[]'::jsonb
+        ) AS items_json
+      FROM bundle_templates bt
+      LEFT JOIN bundle_items bi
+        ON bi.bundle_id = bt.id
+      WHERE bt.registrar_id = $1
+      GROUP BY bt.id
+      ORDER BY LOWER(bt.bundle_name) ASC
+    `,
+    [registrarId]
+  );
+
+  const apiKeysResult = await client.query(
+    `
+      SELECT
+        id,
+        key_label,
+        key_prefix,
+        status,
+        expires_at,
+        last_used_at,
+        created_by_actor_type,
+        created_by_actor_id,
+        revoked_at,
+        revoked_by_actor_type,
+        revoked_by_actor_id,
+        created_at
+      FROM domain_updater.registrar_api_keys
+      WHERE registrar_id = $1
+      ORDER BY created_at DESC, id DESC
+    `,
+    [registrarId]
+  );
+
+  const enabledFamiliesResult = await client.query(
+    `
+      SELECT
+        product_family,
+        is_enabled,
+        created_at
+      FROM domain_updater.registrar_enabled_families
+      WHERE registrar_id = $1
+      ORDER BY LOWER(product_family) ASC
+    `,
+    [registrarId]
+  );
+
+  const authChallengeSummaryResult = await client.query(
+    `
+      SELECT
+        status,
+        COUNT(*)::int AS total
+      FROM domain_updater.auth_challenges
+      WHERE registrar_id = $1
+      GROUP BY status
+      ORDER BY status ASC
+    `,
+    [registrarId]
+  );
+
+  const portalSessionsResult = await client.query(
+    `
+      SELECT
+        id,
+        role,
+        issued_at,
+        expires_at,
+        last_seen_at,
+        revoked_at,
+        created_at
+      FROM domain_updater.portal_sessions
+      WHERE registrar_id = $1
+      ORDER BY created_at DESC, id DESC
+    `,
+    [registrarId]
+  );
+
+  const auditEventsResult = await client.query(
+    `
+      SELECT
+        actor_type,
+        actor_id,
+        action,
+        entity_type,
+        entity_id,
+        created_at
+      FROM domain_updater.audit_events
+      WHERE registrar_id = $1
+      ORDER BY created_at DESC, id DESC
+      LIMIT 25
+    `,
+    [registrarId]
+  );
+
+  const registrationHistoryResult = await client.query(
+    `
+      SELECT
+        COUNT(*)::int AS linked_registration_count,
+        (COUNT(*) FILTER (WHERE pushed = true))::int AS processed_registration_count,
+        MAX(created_at) AS latest_registration_at
+      FROM registrations
+      WHERE registrar_id = $1
+    `,
+    [registrarId]
+  );
+
+  const requestHistoryResult = await client.query(
+    `
+      SELECT
+        COUNT(*)::int AS linked_request_count,
+        MAX(created_at) AS latest_request_at
+      FROM registrar_requests
+      WHERE registrar_id = $1
+    `,
+    [registrarId]
+  );
+
+  return {
+    impact,
+    snapshot: {
+      access: {
+        apiKeys: apiKeysResult.rows,
+        authChallengesByStatus: authChallengeSummaryResult.rows,
+        portalSessions: portalSessionsResult.rows,
+        recentAuditEvents: auditEventsResult.rows,
+      },
+      catalog: {
+        bundleTemplates: bundleTemplatesResult.rows,
+        domainOfferings: domainOfferingsResult.rows,
+        enabledFamilies: enabledFamiliesResult.rows,
+        serviceOfferings: serviceOfferingsResult.rows,
+        servicePackagePrices: servicePackagePricesResult.rows,
+        servicePackages: servicePackagesResult.rows,
+        serviceProducts: serviceProductsResult.rows,
+      },
+      history: {
+        registrations: registrationHistoryResult.rows[0] || {
+          latest_registration_at: null,
+          linked_registration_count: 0,
+          processed_registration_count: 0,
+        },
+        requests: requestHistoryResult.rows[0] || {
+          latest_request_at: null,
+          linked_request_count: 0,
+        },
+      },
+      profile: impact.registrar,
+    },
+  };
+}
+
+async function deleteRegistrar(registrarId, options = {}) {
+  const confirmationPhrase = normalizeString(options.confirmationPhrase).toUpperCase();
+
+  if (confirmationPhrase !== REGISTRAR_DELETION_CONFIRMATION_PHRASE) {
+    throw new Error(
+      `Type ${REGISTRAR_DELETION_CONFIRMATION_PHRASE} to permanently delete this registrar.`
+    );
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const deletionContext = await buildRegistrarDeletionSnapshot(client, registrarId);
+
+    if (!deletionContext) {
+      throw new Error('Registrar not found.');
+    }
+
+    const { impact, snapshot } = deletionContext;
+    const registrar = impact.registrar;
+    const summary = {
+      ...impact.summary,
+      archive_table: 'registrar_deletion_audit',
+      preserves_historical_registrations: true,
+      preserves_historical_requests: true,
+    };
+
+    const archiveInsertResult = await client.query(
+      `
+        INSERT INTO registrar_deletion_audit (
+          registrar_id,
+          registrar_code,
+          registrar_name,
+          primary_email,
+          primary_phone,
+          notification_email,
+          api_endpoint,
+          was_active,
+          deleted_by_actor_type,
+          deleted_by_actor_id,
+          confirmation_phrase,
+          snapshot_json,
+          deletion_summary_json
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb)
+        RETURNING id, deleted_at
+      `,
+      [
+        registrar.id,
+        registrar.registrar_code,
+        registrar.name,
+        registrar.primary_email,
+        registrar.primary_phone,
+        registrar.notification_email,
+        registrar.api_endpoint,
+        registrar.is_active,
+        normalizeNullableString(options.actorType) || 'checkout_admin_tui',
+        normalizeNullableString(options.actorId) || 'admin',
+        confirmationPhrase,
+        JSON.stringify(snapshot),
+        JSON.stringify(summary),
+      ]
+    );
+
+    await client.query(
+      `
+        UPDATE registrations
+        SET registrar_name = $2
+        WHERE registrar_id = $1
+      `,
+      [registrarId, registrar.name]
+    );
+
+    await client.query(
+      `
+        UPDATE registrar_requests
+        SET registrar_name = $2
+        WHERE registrar_id = $1
+      `,
+      [registrarId, registrar.name]
+    );
+
+    const deleteResult = await client.query(
+      `
+        DELETE FROM registrars
+        WHERE id = $1
+        RETURNING id
+      `,
+      [registrarId]
+    );
+
+    if (!deleteResult.rows.length) {
+      throw new Error('Registrar not found.');
+    }
+
+    await client.query('COMMIT');
+
+    return {
+      archiveId: archiveInsertResult.rows[0].id,
+      deletedAt: archiveInsertResult.rows[0].deleted_at,
+      registrar: {
+        id: registrar.id,
+        name: registrar.name,
+        registrarCode: registrar.registrar_code,
+      },
+      summary,
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function insertRegistrarPortalApiKey(client, registrar, options = {}) {
   return createPrimaryRegistrarApiKey(client, registrar, {
     actorId: normalizeNullableString(options.actorId) || 'admin',
     actorType: normalizeNullableString(options.actorType) || 'checkout_admin_tui',
-    keyLabel: normalizeNullableString(options.keyLabel) || 'Primary Portal Key',
+    keyLabel: normalizeNullableString(options.keyLabel) || 'Registrar API Key',
     revokeExisting: options.revokeExisting !== false,
     rotationReason:
       normalizeNullableString(options.rotationReason) || 'admin_rotation',
@@ -729,6 +1368,11 @@ async function insertRegistrarPortalApiKey(client, registrar, options = {}) {
 
 async function createRegistrarPortalApiKey(registrarId, options = {}) {
   const registrar = await getRegistrarById(registrarId);
+  const sendCredentialEmail = options.sendCredentialEmail !== false;
+  const credentialEmailType =
+    normalizeString(options.credentialEmailType).toLowerCase() === 'onboarding'
+      ? 'onboarding'
+      : 'reissue';
 
   if (!registrar) {
     throw new Error('Registrar not found.');
@@ -740,7 +1384,21 @@ async function createRegistrarPortalApiKey(registrarId, options = {}) {
     await client.query('BEGIN');
     const portalKey = await insertRegistrarPortalApiKey(client, registrar, options);
     await client.query('COMMIT');
-    return portalKey;
+    let emailDelivery = null;
+
+    if (sendCredentialEmail) {
+      emailDelivery = await deliverRegistrarPortalCredentialEmail({
+        apiKey: portalKey.apiKey,
+        emailType: credentialEmailType,
+        registrar,
+      });
+    }
+
+    return {
+      ...portalKey,
+      emailDelivery,
+      portalAccessUrl: buildPortalAccessUrl(),
+    };
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -894,7 +1552,7 @@ async function listRegistrarServicePackages(registrarId) {
         LOWER(sp.service_category) ASC,
         LOWER(sp.name) ASC,
         rsp.display_order ASC,
-        LOWER(rsp.package_name) ASC
+        LOWER(COALESCE(rsp.package_name, '')) ASC
     `,
     [registrarId]
   );
@@ -949,7 +1607,7 @@ async function ensureRegistrarNameAvailable(client, name, excludeId = null) {
   let query = `
     SELECT id
     FROM registrars
-    WHERE LOWER(name) = LOWER($1)
+    WHERE LOWER(BTRIM(name)) = LOWER(BTRIM($1))
   `;
 
   if (excludeId) {
@@ -966,15 +1624,131 @@ async function ensureRegistrarNameAvailable(client, name, excludeId = null) {
   }
 }
 
-async function createRegistrar(payload) {
+async function ensureRegistrarEmailAvailable(
+  client,
+  email,
+  fieldLabel,
+  excludeId = null
+) {
+  if (!email) {
+    return;
+  }
+
+  const params = [email];
+  let query = `
+    SELECT id, name
+    FROM registrars
+    WHERE (
+      LOWER(BTRIM(COALESCE(primary_email, ''))) = LOWER(BTRIM($1))
+      OR LOWER(BTRIM(COALESCE(notification_email, ''))) = LOWER(BTRIM($1))
+    )
+  `;
+
+  if (excludeId) {
+    params.push(excludeId);
+    query += ' AND id <> $2';
+  }
+
+  query += ' LIMIT 1';
+
+  const existing = await client.query(query, params);
+
+  if (existing.rows.length > 0) {
+    throw new Error(
+      `${fieldLabel} "${email}" is already assigned to registrar "${existing.rows[0].name}".`
+    );
+  }
+}
+
+async function ensureRegistrarPhoneAvailable(client, phone, excludeId = null) {
+  const normalizedPhone = normalizePhoneForComparison(phone);
+
+  if (!normalizedPhone) {
+    return;
+  }
+
+  const params = [normalizedPhone];
+  let query = `
+    SELECT id, name
+    FROM registrars
+    WHERE regexp_replace(BTRIM(COALESCE(primary_phone, '')), '[^0-9+]', '', 'g') = $1
+  `;
+
+  if (excludeId) {
+    params.push(excludeId);
+    query += ' AND id <> $2';
+  }
+
+  query += ' LIMIT 1';
+
+  const existing = await client.query(query, params);
+
+  if (existing.rows.length > 0) {
+    throw new Error(
+      `Registrar primary phone "${phone}" is already assigned to registrar "${existing.rows[0].name}".`
+    );
+  }
+}
+
+async function ensureRegistrarContactAvailability(client, input, excludeId = null) {
+  const effectiveNotificationEmail = input.notificationEmail;
+
+  await ensureRegistrarNameAvailable(client, input.name, excludeId);
+  await ensureRegistrarEmailAvailable(
+    client,
+    input.primaryEmail,
+    'Registrar primary email',
+    excludeId
+  );
+
+  if (
+    effectiveNotificationEmail &&
+    effectiveNotificationEmail.toLowerCase() !==
+      String(input.primaryEmail || '').toLowerCase()
+  ) {
+    await ensureRegistrarEmailAvailable(
+      client,
+      effectiveNotificationEmail,
+      'Registrar notification email',
+      excludeId
+    );
+  }
+
+  await ensureRegistrarPhoneAvailable(client, input.primaryPhone, excludeId);
+}
+
+async function sendRegistrarPortalCredentialEmail(
+  registrarId,
+  apiKey,
+  options = {}
+) {
+  const registrar = await getRegistrarById(registrarId);
+
+  if (!registrar) {
+    throw new Error('Registrar not found.');
+  }
+
+  return deliverRegistrarPortalCredentialEmail({
+    apiKey,
+    emailType: options.emailType,
+    registrar,
+  });
+}
+
+async function createRegistrar(payload, options = {}) {
   const input = normalizeRegistrarInput(payload);
   validateRegistrarInput(input);
+  const sendCredentialEmail = options.sendCredentialEmail !== false;
+  const credentialEmailType =
+    normalizeString(options.credentialEmailType).toLowerCase() === 'reissue'
+      ? 'reissue'
+      : 'onboarding';
 
   const client = await pool.connect();
 
   try {
     await client.query('BEGIN');
-    await ensureRegistrarNameAvailable(client, input.name);
+    await ensureRegistrarContactAvailability(client, input);
 
     const result = await client.query(
       `
@@ -996,7 +1770,7 @@ async function createRegistrar(payload) {
         input.primaryEmail,
         input.primaryPhone,
         input.apiEndpoint,
-        input.notificationEmail || input.primaryEmail,
+        input.notificationEmail,
         input.isActive,
         'admin_tui',
         null,
@@ -1030,22 +1804,28 @@ async function createRegistrar(payload) {
     const portalKey = await insertRegistrarPortalApiKey(client, createdRegistrar, {
       actorId: 'admin',
       actorType: 'checkout_admin_tui',
-      keyLabel: 'Primary Portal Key',
+      keyLabel: 'Registrar API Key',
       rotationReason: 'initial_onboarding',
     });
 
     await client.query('COMMIT');
 
     const registrar = await getRegistrarById(result.rows[0].id);
-    const onboardingEmail = await sendRegistrarOnboardingEmail({
-      apiKey: portalKey.apiKey,
-      registrar: createdRegistrar,
-    });
+    let emailDelivery = null;
+
+    if (sendCredentialEmail) {
+      emailDelivery = await deliverRegistrarPortalCredentialEmail({
+        apiKey: portalKey.apiKey,
+        emailType: credentialEmailType,
+        registrar: createdRegistrar,
+      });
+    }
 
     return {
       onboarding: {
         ...portalKey,
-        emailDelivery: onboardingEmail,
+        emailDelivery,
+        portalAccessUrl: buildPortalAccessUrl(),
       },
       registrar,
     };
@@ -1081,7 +1861,7 @@ async function updateRegistrar(registrarId, payload) {
     }
 
     const currentRegistrar = existing.rows[0];
-    await ensureRegistrarNameAvailable(client, input.name, registrarId);
+    await ensureRegistrarContactAvailability(client, input, registrarId);
 
     await client.query(
       `
@@ -1103,7 +1883,7 @@ async function updateRegistrar(registrarId, payload) {
         input.primaryEmail,
         input.primaryPhone,
         input.apiEndpoint,
-        input.notificationEmail || input.primaryEmail,
+        input.notificationEmail,
         input.isActive,
         'admin_tui',
         null,
@@ -2147,7 +2927,8 @@ async function listFailedPushes(limit = 50) {
           fr.registration_id,
           fr.error_message,
           fr.attempted_at,
-          r.full_name,
+          r.first_name,
+          r.last_name,
           r.email,
           r.phone,
           r.domain_name,
@@ -2222,9 +3003,17 @@ async function getRegistrationByExternalReference(externalRequestId) {
       SELECT
         r.request_id,
         r.external_request_id,
-        r.full_name,
-        r.email,
+        r.first_name,
+        r.last_name,
         r.phone,
+        r.email,
+        r.company_name,
+        r.kra_pin,
+        r.street_address,
+        r.city,
+        r.state,
+        r.postcode,
+        r.country,
         r.domain_name,
         r.domain_extension,
         r.target_service,
@@ -2245,7 +3034,6 @@ async function getRegistrationByExternalReference(externalRequestId) {
         r.created_at,
         r.updated_at,
         COALESCE(r.registrar_id, reg.id) AS registrar_id,
-        reg.registrar_code,
         reg.api_endpoint AS registrar_api_endpoint,
         reg.notification_email AS registrar_notification_email,
         reg.is_active AS registrar_is_active,
@@ -2369,9 +3157,11 @@ async function retryAllFailedPushes() {
 module.exports = {
   createRegistrar,
   createRegistrarPortalApiKey,
+  deleteRegistrar,
   deleteRegistrarServicePackage,
   deleteRegistrarServicePackagePrice,
   getDashboardData,
+  getRegistrarDeletionImpact,
   getRegistrationByExternalReference,
   getRegistrarById,
   listDomainExtensions,
@@ -2386,6 +3176,7 @@ module.exports = {
   retryAllFailedPushes,
   retryFailedPush,
   saveRegistrarDomainOffering,
+  sendRegistrarPortalCredentialEmail,
   saveRegistrarServicePackage,
   saveRegistrarServicePackagePrice,
   saveRegistrarServiceOffering,

@@ -1,4 +1,4 @@
-const { createHmac, randomBytes } = require('crypto');
+const { createHmac, randomBytes, randomInt } = require('crypto');
 const { env } = require('../config/env');
 const {
   createShortFingerprint,
@@ -6,9 +6,12 @@ const {
 } = require('../utils/diagnostics');
 
 const API_KEY_PREFIX = 'dkc-';
-const API_KEY_SECRET_CHARSET =
-  'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
-const API_KEY_SECRET_LENGTH = 20;
+const API_KEY_UPPERCASE_CHARSET = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+const API_KEY_LOWERCASE_CHARSET = 'abcdefghijkmnopqrstuvwxyz';
+const API_KEY_DIGIT_CHARSET = '23456789';
+const API_KEY_SECRET_CHARSET = `${API_KEY_UPPERCASE_CHARSET}${API_KEY_LOWERCASE_CHARSET}${API_KEY_DIGIT_CHARSET}`;
+const API_KEY_SECRET_LENGTH = 36;
+const API_KEY_PREFIX_LENGTH = 20;
 
 function normalizeString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -38,30 +41,32 @@ function generateFromCharset(length, charset) {
   let output = '';
 
   while (output.length < length) {
-    const bytes = randomBytes(length * 2);
-
-    for (const byte of bytes) {
-      output += charset[byte % charset.length];
-
-      if (output.length === length) {
-        break;
-      }
-    }
+    output += charset[randomInt(charset.length)];
   }
 
   return output;
 }
 
-function generateApiKey() {
-  const secret = generateFromCharset(
-    API_KEY_SECRET_LENGTH,
-    API_KEY_SECRET_CHARSET
+function hasRequiredApiKeyCharacterClasses(secret) {
+  return (
+    /[A-Z]/.test(secret) &&
+    /[a-z]/.test(secret) &&
+    /[2-9]/.test(secret)
   );
+}
+
+function generateApiKey() {
+  let secret = '';
+
+  do {
+    secret = generateFromCharset(API_KEY_SECRET_LENGTH, API_KEY_SECRET_CHARSET);
+  } while (!hasRequiredApiKeyCharacterClasses(secret));
+
   const key = `${API_KEY_PREFIX}${secret}`;
 
   return {
     key,
-    prefix: key.slice(0, 12),
+    prefix: key.slice(0, API_KEY_PREFIX_LENGTH),
   };
 }
 

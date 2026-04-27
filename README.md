@@ -28,6 +28,12 @@ Run database migrations:
 npm run migrate
 ```
 
+Check whether existing registrar data will violate the registrar identity guardrails:
+
+```bash
+npm run registrars:identity-check
+```
+
 Retry failed registrar pushes:
 
 ```bash
@@ -59,6 +65,9 @@ Launches the terminal-only admin dashboard for registrar management, domain pric
 
 `npm run migrate`
 Applies any new SQL files in `migrations/` and records them in `schema_migrations`.
+
+`npm run registrars:identity-check`
+Reports duplicate registrar names, emails, or phones that would block the identity guardrail indexes in migration `018`.
 
 `npm run retry:registrar-pushes`
 Retries registrar API pushes that previously failed and were logged in `failed_requests`.
@@ -121,6 +130,14 @@ Inside `npm run admin`:
 - Press `o` to manage domain offers and extension pricing
 - Press `p` to manage service packages and standard package pricing
 
+Registrar onboarding now requires a complete profile before save:
+
+- `Registrar Name`
+- `Primary Email`
+- `Primary Phone`
+- `API Endpoint`
+- `Notification Email`
+
 Inside the package manager:
 
 - `a` adds a package
@@ -141,12 +158,46 @@ Inside the pricing manager:
 
 This is the current backend flow when the app submits a checkout request:
 
-1. The app sends `POST /checkout/registrations` or `POST /checkout` with the selected registrar, domain, product family, package or pricing identifiers, and the checkout summary snapshot.
+1. The app sends `POST /checkout/registrations` or `POST /checkout` with the structured customer profile fields and a simple purchase summary shape.
 2. The backend validates the payload, resolves the exact selected offering from the catalog tables, and checks whether the same request already exists.
 3. If the request is new, the backend stores a row in `registrations` with `status = 'received'`.
 4. The API returns to the app immediately after the registration row is accepted.
 5. SMS, user email, registrar email, and registrar API push then run in the background.
 6. Each delivery channel writes its own status to `delivery_logs` and `delivery_attempt_logs`.
+
+### Customer Payload Contract
+
+The checkout request now carries the customer profile as first-class top-level fields:
+
+- `first_name`
+- `last_name`
+- `phone`
+- `email`
+- `company_name` (optional)
+- `kra_pin` (optional)
+- `street_address`
+- `city`
+- `state`
+- `postcode`
+- `country`
+
+This same order is now used in the app payload builders, checkout normalization, registrar push payloads, and registrar-facing documentation so integrations can mirror one stable field sequence.
+
+The same request now carries the order selection in a simplified top-level form:
+
+- `domain_name`
+- `domain_extension`
+- `plus` (optional)
+- `type` (optional)
+- `package` (optional)
+- `registrar_name`
+- `price_ksh` (optional)
+- `currency_code` (optional)
+- `period`
+
+This is the public contract used by the app, the checkout API, and the registrar push payload. The
+backend still keeps some legacy/internal columns for catalog resolution and history, but those are no
+longer the primary communication shape.
 
 ### App To Backend HTTP Responses
 
@@ -155,8 +206,9 @@ The registration controller currently uses these HTTP response codes:
 | HTTP code | Meaning in this backend | Typical reason |
 | --- | --- | --- |
 | `201` | The request was accepted by the backend | New request stored |
-| `400` | The request could not be accepted as submitted | Missing required fields, registrar not found, selected domain option not found, selected service package not found, or selected bundle not found |
+| `404` | The referenced registrar or selected catalog record was not found | Registrar not found, selected domain option not found, selected service package not found, or selected bundle not found |
 | `409` | The order was blocked because the domain already has an active order | Same customer tried to submit the same domain again while an earlier order is still `received`, whether it was the same package or a different one |
+| `422` | The request payload was structurally invalid | Missing customer profile fields, invalid email, invalid phone, invalid address data, or missing registrar selection |
 | `500` | Unexpected server-side failure | Unhandled error while creating the registration |
 
 Important behavior:
@@ -174,9 +226,10 @@ The registration flow now logs the main lifecycle using clearer order-focused ch
 
 The normalized order log now prioritizes:
 
-- `full_name`, `email`, and `phone` from the normalized customer payload
-- `target_service` as the canonical machine-readable product family, for example `servers`
-- `package_name` as the chosen package label, for example `Premium`
+- the explicit customer fields such as `first_name`, `last_name`, `phone`, `email`, `city`,
+  `state`, and `country`
+- the simple order summary fields `domain_name`, `domain_extension`, `plus`, `type`, `package`,
+  `registrar_name`, `period`, and `price_ksh`
 
 Delivery summaries also include per-channel:
 
@@ -194,7 +247,8 @@ The `registrations` table stores the core request state:
 | `pushed` | `true` after the registrar API accepted the request with a successful HTTP response. `false` means the registrar push is still pending, skipped, or failed. |
 | `registrar_reference_id` | Optional reference returned by the registrar endpoint when available as `reference_id` or `referenceId`. |
 | `message_sent` | `true` after the user SMS acknowledgement succeeds. This is only for the SMS acknowledgement flag, not for all delivery channels. |
-| `selection_snapshot_json` | Snapshot of what the customer selected at checkout, including purchase summary, billing, quoted price, and selected package or option details. |
+| `first_name`, `last_name`, `phone`, `email`, `company_name`, `kra_pin`, `street_address`, `city`, `state`, `postcode`, `country` | Structured customer profile fields copied from the app payload in one canonical order so the original KYC/profile data is preserved consistently with the order record. |
+| `selection_snapshot_json` | A compact snapshot of the customer-facing order shape: `domain_name`, `domain_extension`, `plus`, `type`, `package`, `registrar_name`, `price_ksh`, `currency_code`, and `period`. |
 
 ### Active Domain Order Protection
 
@@ -290,3 +344,6 @@ When debugging a request, use the fields together rather than relying on only on
 | Was registrar email sent? | `delivery_logs` where `delivery_type = 'email'` and `recipient_type = 'registrar'` |
 | Was the registrar API push accepted? | `registrations.pushed = true` and `delivery_logs` where `delivery_type = 'registrar_api'` has `status = 'success'` |
 | Why did something fail? | `delivery_logs.last_error`, `delivery_attempt_logs`, and `failed_requests` for registrar push failures |
+
+
+node -e "const pool=require('./db');(async()=>{try{const result=await pool.query('DELETE FROM registrars');console.log('Deleted '+result.rowCount+' registrar(s). Live catalog, bundles, API keys, portal sessions, and registrar-owned records were cascaded.');}catch(error){console.error(error);process.exit(1)}finally{await pool.end()}})()"

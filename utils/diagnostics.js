@@ -1,4 +1,5 @@
 const { createHash } = require('crypto');
+const API_KEY_SUMMARY_PREFIX_LENGTH = 20;
 
 function normalizeString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
@@ -30,7 +31,7 @@ function buildApiKeySummary(value) {
 
   return {
     length: normalized.length || 0,
-    prefix: normalized ? normalized.slice(0, 12) : null,
+    prefix: normalized ? normalized.slice(0, API_KEY_SUMMARY_PREFIX_LENGTH) : null,
     present: Boolean(normalized),
   };
 }
